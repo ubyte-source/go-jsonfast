@@ -234,6 +234,31 @@ func TestFindField_EmptyObject(t *testing.T) {
 	}
 }
 
+func TestFindFieldString_Basic(t *testing.T) {
+	s := `{"a":1,"target":"found","b":2}`
+	val, ok := FindFieldString(s, "target")
+	if !ok {
+		t.Fatal("expected field to be found")
+	}
+	if string(val) != `"found"` {
+		t.Fatalf("got %q, want %q", val, `"found"`)
+	}
+}
+
+func TestFindFieldString_Empty(t *testing.T) {
+	_, ok := FindFieldString("", "k")
+	if ok {
+		t.Error("expected false for empty string")
+	}
+}
+
+func TestFindFieldString_NotFound(t *testing.T) {
+	_, ok := FindFieldString(`{"a":1}`, "missing")
+	if ok {
+		t.Error("expected false for missing key")
+	}
+}
+
 func TestFlattenObject_EmptyObject(t *testing.T) {
 	b := New(128)
 	b.BeginObject()
@@ -624,5 +649,403 @@ func TestSkipBracedAt_UnterminatedBrace(t *testing.T) {
 	_, ok := SkipBracedAt(data, 0, '{', '}')
 	if ok {
 		t.Error("expected false for unterminated brace")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// IterateArray tests
+// ---------------------------------------------------------------------------
+
+func TestIterateArray_Strings(t *testing.T) {
+	data := []byte(`["alpha","beta","gamma"]`)
+	var got []string
+	ok := IterateArray(data, func(elem []byte) bool {
+		got = append(got, string(elem))
+		return true
+	})
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	want := []string{`"alpha"`, `"beta"`, `"gamma"`}
+	if len(got) != len(want) {
+		t.Fatalf("len=%d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("[%d]=%q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestIterateArray_MixedTypes(t *testing.T) {
+	data := []byte(`[1, "two", true, null, {"k":"v"}, [3]]`)
+	var got []string
+	ok := IterateArray(data, func(elem []byte) bool {
+		got = append(got, string(elem))
+		return true
+	})
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	want := []string{"1", `"two"`, "true", "null", `{"k":"v"}`, "[3]"}
+	if len(got) != len(want) {
+		t.Fatalf("len=%d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("[%d]=%q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestIterateArray_Empty(t *testing.T) {
+	called := false
+	ok := IterateArray([]byte(`[]`), func(_ []byte) bool {
+		called = true
+		return true
+	})
+	if !ok {
+		t.Error("expected ok=true for empty array")
+	}
+	if called {
+		t.Error("fn should not be called for empty array")
+	}
+}
+
+func TestIterateArray_WhitespaceFormatted(t *testing.T) {
+	data := []byte("  [  \"a\" , \"b\"  ]  ")
+	var got []string
+	ok := IterateArray(data, func(elem []byte) bool {
+		got = append(got, string(elem))
+		return true
+	})
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if len(got) != 2 || got[0] != `"a"` || got[1] != `"b"` {
+		t.Errorf("got %v, want [\"a\", \"b\"]", got)
+	}
+}
+
+func TestIterateArray_EarlyStop(t *testing.T) {
+	data := []byte(`[1,2,3,4,5]`)
+	count := 0
+	IterateArray(data, func(_ []byte) bool {
+		count++
+		return count < 3
+	})
+	if count != 3 {
+		t.Errorf("count=%d, want 3", count)
+	}
+}
+
+func TestIterateArray_Malformed(t *testing.T) {
+	cases := []struct {
+		name string
+		data string
+	}{
+		{"not_array", `{"a":1}`},
+		{"unterminated", `[1,2`},
+		{"missing_comma", `[1 2]`},
+		{"empty_string", ``},
+		{"just_bracket", `[`},
+		{"truncated_value", `["`},
+	}
+	for _, tt := range cases {
+		ok := IterateArray([]byte(tt.data), func(_ []byte) bool { return true })
+		if ok {
+			t.Errorf("%s: expected false", tt.name)
+		}
+	}
+}
+
+func TestIterateArray_NestedObjects(t *testing.T) {
+	data := []byte(`[{"a":1},{"b":2}]`)
+	var got []string
+	ok := IterateArray(data, func(elem []byte) bool {
+		got = append(got, string(elem))
+		return true
+	})
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if len(got) != 2 || got[0] != `{"a":1}` || got[1] != `{"b":2}` {
+		t.Errorf("got %v", got)
+	}
+}
+
+func TestIterateArray_SingleElement(t *testing.T) {
+	data := []byte(`[42]`)
+	var got []string
+	ok := IterateArray(data, func(elem []byte) bool {
+		got = append(got, string(elem))
+		return true
+	})
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if len(got) != 1 || got[0] != "42" {
+		t.Errorf("got %v, want [42]", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// IterateStringArray tests
+// ---------------------------------------------------------------------------
+
+func TestIterateStringArray_Basic(t *testing.T) {
+	data := []byte(`["hello","world"]`)
+	var got []string
+	ok := IterateStringArray(data, func(val string) bool {
+		got = append(got, val)
+		return true
+	})
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if len(got) != 2 || got[0] != "hello" || got[1] != "world" {
+		t.Errorf("got %v, want [hello, world]", got)
+	}
+}
+
+func TestIterateStringArray_Empty(t *testing.T) {
+	called := false
+	ok := IterateStringArray([]byte(`[]`), func(_ string) bool {
+		called = true
+		return true
+	})
+	if !ok {
+		t.Error("expected ok=true for empty array")
+	}
+	if called {
+		t.Error("fn should not be called for empty array")
+	}
+}
+
+func TestIterateStringArray_NonStringElement(t *testing.T) {
+	ok := IterateStringArray([]byte(`["a",123,"b"]`), func(_ string) bool {
+		return true
+	})
+	if ok {
+		t.Error("expected false for non-string element in array")
+	}
+}
+
+func TestIterateStringArray_SingleID(t *testing.T) {
+	data := []byte(`["1771419690573-2"]`)
+	var got []string
+	ok := IterateStringArray(data, func(val string) bool {
+		got = append(got, val)
+		return true
+	})
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if len(got) != 1 || got[0] != "1771419690573-2" {
+		t.Errorf("got %v, want [1771419690573-2]", got)
+	}
+}
+
+func TestIterateStringArray_ManyIDs(t *testing.T) {
+	data := []byte(`["id-1","id-2","id-3","id-4","id-5"]`)
+	var got []string
+	ok := IterateStringArray(data, func(val string) bool {
+		got = append(got, val)
+		return true
+	})
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if len(got) != 5 {
+		t.Fatalf("len=%d, want 5", len(got))
+	}
+	for i, want := range []string{"id-1", "id-2", "id-3", "id-4", "id-5"} {
+		if got[i] != want {
+			t.Errorf("[%d]=%q, want %q", i, got[i], want)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Array iteration benchmarks
+// ---------------------------------------------------------------------------
+
+func BenchmarkIterateArray(b *testing.B) {
+	data := []byte(`[1,"hello",true,null,{"k":"v"},[1,2,3]]`)
+	b.ReportAllocs()
+	b.SetBytes(int64(len(data)))
+	b.ResetTimer()
+	for b.Loop() {
+		IterateArray(data, func(_ []byte) bool { return true })
+	}
+}
+
+func BenchmarkIterateArray_Strings10(b *testing.B) {
+	data := []byte(`["alpha","bravo","charlie","delta","echo","foxtrot","golf","hotel","india","juliet"]`)
+	b.ReportAllocs()
+	b.SetBytes(int64(len(data)))
+	b.ResetTimer()
+	for b.Loop() {
+		IterateStringArray(data, func(_ string) bool { return true })
+	}
+}
+
+func BenchmarkIterateArray_Strings100(b *testing.B) {
+	// Build a 100-element string array
+	buf := []byte{'['}
+	for i := range 100 {
+		if i > 0 {
+			buf = append(buf, ',')
+		}
+		buf = append(buf, '"')
+		buf = append(buf, []byte("id-"+string(rune('A'+i%26))+"-item")...)
+		buf = append(buf, '"')
+	}
+	buf = append(buf, ']')
+	b.ReportAllocs()
+	b.SetBytes(int64(len(buf)))
+	b.ResetTimer()
+	for b.Loop() {
+		IterateStringArray(buf, func(_ string) bool { return true })
+	}
+}
+
+func BenchmarkIterateArray_NestedObjects(b *testing.B) {
+	data := []byte(`[{"a":1},{"b":2},{"c":3},{"d":4},{"e":5}]`)
+	b.ReportAllocs()
+	b.SetBytes(int64(len(data)))
+	b.ResetTimer()
+	for b.Loop() {
+		IterateArray(data, func(_ []byte) bool { return true })
+	}
+}
+
+// ---------------------------------------------------------------------------
+// IterateStringArrayUnsafe tests
+// ---------------------------------------------------------------------------
+
+func TestIterateStringArrayUnsafe_Basic(t *testing.T) {
+	data := []byte(`["a","bb","ccc"]`)
+	var got []string
+	ok := IterateStringArrayUnsafe(data, func(val string) bool {
+		got = append(got, val) // intentionally escapes — test correctness, not safety
+		return true
+	})
+	if !ok {
+		t.Fatal("expected ok")
+	}
+	want := []string{"a", "bb", "ccc"}
+	if len(got) != len(want) {
+		t.Fatalf("len=%d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("[%d]=%q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestIterateStringArrayUnsafe_Empty(t *testing.T) {
+	if !IterateStringArrayUnsafe([]byte(`[]`), func(_ string) bool { return true }) {
+		t.Fatal("expected ok for empty array")
+	}
+}
+
+func TestIterateStringArrayUnsafe_NonString(t *testing.T) {
+	if IterateStringArrayUnsafe([]byte(`["a",42]`), func(_ string) bool { return true }) {
+		t.Fatal("expected false for non-string element")
+	}
+}
+
+func BenchmarkIterateStringArrayUnsafe_10(b *testing.B) {
+	data := []byte(`["alpha","bravo","charlie","delta","echo","foxtrot","golf","hotel","india","juliet"]`)
+	b.ReportAllocs()
+	b.SetBytes(int64(len(data)))
+	b.ResetTimer()
+	for b.Loop() {
+		IterateStringArrayUnsafe(data, func(_ string) bool { return true })
+	}
+}
+
+func BenchmarkIterateStringArrayUnsafe_100(b *testing.B) {
+	buf := []byte{'['}
+	for i := range 100 {
+		if i > 0 {
+			buf = append(buf, ',')
+		}
+		buf = append(buf, '"')
+		buf = append(buf, []byte("id-"+string(rune('A'+i%26))+"-item")...)
+		buf = append(buf, '"')
+	}
+	buf = append(buf, ']')
+	b.ReportAllocs()
+	b.SetBytes(int64(len(buf)))
+	b.ResetTimer()
+	for b.Loop() {
+		IterateStringArrayUnsafe(buf, func(_ string) bool { return true })
+	}
+}
+
+// ---------------------------------------------------------------------------
+// IterateArrayString / IterateStringArrayString tests
+// ---------------------------------------------------------------------------
+
+func TestIterateArrayString_Basic(t *testing.T) {
+	s := `[1,"hello",true]`
+	var got []string
+	ok := IterateArrayString(s, func(elem []byte) bool {
+		got = append(got, string(elem))
+		return true
+	})
+	if !ok {
+		t.Fatal("expected ok")
+	}
+	want := []string{"1", `"hello"`, "true"}
+	if len(got) != len(want) {
+		t.Fatalf("len=%d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("[%d]=%q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestIterateArrayString_Empty(t *testing.T) {
+	if IterateArrayString("", func(_ []byte) bool { return true }) {
+		t.Fatal("expected false for empty string")
+	}
+	if !IterateArrayString("[]", func(_ []byte) bool { return true }) {
+		t.Fatal("expected ok for empty array")
+	}
+}
+
+func TestIterateStringArrayString_Basic(t *testing.T) {
+	s := `["one","two","three"]`
+	var got []string
+	ok := IterateStringArrayString(s, func(val string) bool {
+		got = append(got, val)
+		return true
+	})
+	if !ok {
+		t.Fatal("expected ok")
+	}
+	want := []string{"one", "two", "three"}
+	if len(got) != len(want) {
+		t.Fatalf("len=%d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("[%d]=%q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestIterateStringArrayString_Empty(t *testing.T) {
+	if IterateStringArrayString("", func(_ string) bool { return true }) {
+		t.Fatal("expected false for empty string")
+	}
+	if !IterateStringArrayString("[]", func(_ string) bool { return true }) {
+		t.Fatal("expected ok for empty array")
 	}
 }

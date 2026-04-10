@@ -260,7 +260,8 @@ func IterateFieldsString(s string, fn func(key, value []byte) bool) bool {
 }
 
 // FindField finds a top-level field by key name in a JSON object.
-// Returns the raw value bytes and whether the field was found.
+// Returns the raw value bytes and true, or (nil, false) if not found
+// or the JSON is malformed.
 func FindField(data []byte, key string) ([]byte, bool) {
 	keyWithQuotes := len(key) + 2
 	var result []byte
@@ -274,6 +275,19 @@ func FindField(data []byte, key string) ([]byte, bool) {
 		return true
 	})
 	return result, found
+}
+
+// FindFieldString is like FindField but accepts a string input,
+// avoiding the []byte(string) allocation. The returned slice shares
+// the string's backing memory and must not be mutated.
+//
+//nolint:gosec // unsafe usage intentional: zero-alloc string→[]byte view
+func FindFieldString(s, key string) ([]byte, bool) {
+	if s == "" {
+		return nil, false
+	}
+	data := unsafe.Slice(unsafe.StringData(s), len(s))
+	return FindField(data, key)
 }
 
 // AddRawBytesField adds a "name":value field where name is raw bytes
@@ -320,4 +334,123 @@ func flattenObject(b *Builder, data []byte, depth int) bool {
 		return true
 	})
 	return parseOK && callbackOK
+}
+
+// iterateRawArray is the core array iterator. It parses a JSON array and
+// calls fn(data[vs:ve]) for each element. fn returns true to continue,
+// false to stop.
+//
+//nolint:cyclop // single-pass JSON array scanner — mirrors iterateRawFields pattern
+func iterateRawArray(data []byte, fn func(element []byte) bool) bool {
+	i := SkipWS(data, 0)
+	if i >= len(data) || data[i] != '[' {
+		return false
+	}
+	i++
+
+	i = SkipWS(data, i)
+	if i >= len(data) {
+		return false
+	}
+	if data[i] == ']' {
+		return true
+	}
+
+	for {
+		vs := i
+		ve, ok := SkipValueAt(data, i)
+		if !ok {
+			return false
+		}
+		i = ve
+
+		if !fn(data[vs:ve]) {
+			return false
+		}
+
+		i = SkipWS(data, i)
+		if i >= len(data) {
+			return false
+		}
+		switch data[i] {
+		case ',':
+			i++
+			i = SkipWS(data, i)
+		case ']':
+			return true
+		default:
+			return false
+		}
+	}
+}
+
+// IterateArray calls fn for each element in a JSON array.
+// element is the raw JSON bytes of each value (string with quotes,
+// number, bool, null, nested object, or nested array).
+// Returns false if the JSON is malformed or fn returns false.
+func IterateArray(data []byte, fn func(element []byte) bool) bool {
+	return iterateRawArray(data, fn)
+}
+
+// IterateStringArray calls fn for each string element in a JSON array.
+// val is the unquoted string content (safe copy). Non-string elements
+// cause the iteration to return false (type mismatch).
+// Returns false if the JSON is malformed, a non-string element is found,
+// or fn returns false.
+//
+// Each val is a safe copy; use IterateStringArrayUnsafe for zero-alloc
+// iteration when the string is not retained beyond the callback.
+func IterateStringArray(data []byte, fn func(val string) bool) bool {
+	return IterateArray(data, func(elem []byte) bool {
+		if len(elem) < 2 || elem[0] != '"' || elem[len(elem)-1] != '"' {
+			return false // not a string element
+		}
+		return fn(string(elem[1 : len(elem)-1]))
+	})
+}
+
+// IterateStringArrayUnsafe is like IterateStringArray but returns a
+// zero-allocation string that aliases the input data slice.
+//
+// SAFETY: the string passed to fn is only valid for the duration of that
+// callback invocation. Do NOT store, append, or let it escape. If you need
+// to keep the value, copy it: saved = strings.Clone(val).
+//
+//nolint:gosec // unsafe.String intentional: zero-alloc string view into data
+func IterateStringArrayUnsafe(data []byte, fn func(val string) bool) bool {
+	return IterateArray(data, func(elem []byte) bool {
+		if len(elem) < 2 || elem[0] != '"' || elem[len(elem)-1] != '"' {
+			return false
+		}
+		return fn(unsafe.String(&elem[1], len(elem)-2))
+	})
+}
+
+// IterateArrayString is like IterateArray but accepts a string input,
+// avoiding the []byte(string) allocation. The callback slices share
+// the string's backing memory and must not be mutated.
+// Returns false if the JSON is malformed or fn returns false.
+//
+//nolint:gosec // unsafe usage intentional: zero-alloc string→[]byte view
+func IterateArrayString(s string, fn func(element []byte) bool) bool {
+	if s == "" {
+		return false
+	}
+	data := unsafe.Slice(unsafe.StringData(s), len(s))
+	return IterateArray(data, fn)
+}
+
+// IterateStringArrayString is like IterateStringArray but accepts a string
+// input, avoiding the []byte(string) allocation at the caller level.
+// Each val is still a safe copy.
+// Returns false if the JSON is malformed, a non-string element is found,
+// or fn returns false.
+//
+//nolint:gosec // unsafe usage intentional: zero-alloc string→[]byte view
+func IterateStringArrayString(s string, fn func(val string) bool) bool {
+	if s == "" {
+		return false
+	}
+	data := unsafe.Slice(unsafe.StringData(s), len(s))
+	return IterateStringArray(data, fn)
 }

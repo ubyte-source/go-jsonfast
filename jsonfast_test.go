@@ -1511,3 +1511,169 @@ func TestRelease_LargeBuffer(_ *testing.T) {
 	Release(b)
 	// No assertion needed — just verify no panic.
 }
+
+// ---------------------------------------------------------------------------
+// FieldKey tests — covers NewFieldKey, precomputedKey, and all Add*FieldKey
+// ---------------------------------------------------------------------------
+
+func TestFieldKey_StringField(t *testing.T) {
+	k := NewFieldKey("name")
+	b := New(128)
+	b.BeginObject()
+	b.AddStringFieldKey(k, "Alice")
+	b.EndObject()
+	want := `{"name":"Alice"}`
+	if got := string(b.Bytes()); got != want {
+		t.Fatalf("got %s, want %s", got, want)
+	}
+}
+
+func TestFieldKey_StringField_Multiple(t *testing.T) {
+	kA := NewFieldKey("a")
+	kB := NewFieldKey("b")
+	b := New(128)
+	b.BeginObject()
+	b.AddStringFieldKey(kA, "1")
+	b.AddStringFieldKey(kB, "2")
+	b.EndObject()
+	want := `{"a":"1","b":"2"}`
+	if got := string(b.Bytes()); got != want {
+		t.Fatalf("got %s, want %s", got, want)
+	}
+}
+
+func TestFieldKey_IntField(t *testing.T) {
+	k := NewFieldKey("count")
+	b := New(128)
+	b.BeginObject()
+	b.AddIntFieldKey(k, 42)
+	b.EndObject()
+	want := `{"count":42}`
+	if got := string(b.Bytes()); got != want {
+		t.Fatalf("got %s, want %s", got, want)
+	}
+}
+
+func TestFieldKey_Int64Field(t *testing.T) {
+	k := NewFieldKey("big")
+	b := New(128)
+	b.BeginObject()
+	b.AddInt64FieldKey(k, -9223372036854775808) // math.MinInt64
+	b.EndObject()
+	want := `{"big":-9223372036854775808}`
+	if got := string(b.Bytes()); got != want {
+		t.Fatalf("got %s, want %s", got, want)
+	}
+}
+
+func TestFieldKey_Int64Field_Positive(t *testing.T) {
+	k := NewFieldKey("v")
+	b := New(128)
+	b.BeginObject()
+	b.AddInt64FieldKey(k, 100)
+	b.EndObject()
+	want := `{"v":100}`
+	if got := string(b.Bytes()); got != want {
+		t.Fatalf("got %s, want %s", got, want)
+	}
+}
+
+func TestFieldKey_Uint64Field(t *testing.T) {
+	k := NewFieldKey("id")
+	b := New(128)
+	b.BeginObject()
+	b.AddUint64FieldKey(k, 18446744073709551615)
+	b.EndObject()
+	want := `{"id":18446744073709551615}`
+	if got := string(b.Bytes()); got != want {
+		t.Fatalf("got %s, want %s", got, want)
+	}
+}
+
+func TestFieldKey_BoolField(t *testing.T) {
+	k := NewFieldKey("ok")
+	b := New(128)
+	b.BeginObject()
+	b.AddBoolFieldKey(k, true)
+	b.AddBoolFieldKey(k, false)
+	b.EndObject()
+	want := `{"ok":true,"ok":false}`
+	if got := string(b.Bytes()); got != want {
+		t.Fatalf("got %s, want %s", got, want)
+	}
+}
+
+func TestFieldKey_RawJSONFieldKey(t *testing.T) {
+	k := NewFieldKey("data")
+	b := New(128)
+	b.BeginObject()
+	b.AddRawJSONFieldKey(k, []byte(`[1,2,3]`))
+	b.EndObject()
+	want := `{"data":[1,2,3]}`
+	if got := string(b.Bytes()); got != want {
+		t.Fatalf("got %s, want %s", got, want)
+	}
+}
+
+func TestFieldKey_RawJSONFieldKeyString(t *testing.T) {
+	k := NewFieldKey("raw")
+	b := New(128)
+	b.BeginObject()
+	b.AddRawJSONFieldKeyString(k, `{"nested":true}`)
+	b.EndObject()
+	want := `{"raw":{"nested":true}}`
+	if got := string(b.Bytes()); got != want {
+		t.Fatalf("got %s, want %s", got, want)
+	}
+}
+
+func TestFieldKey_Float64Field(t *testing.T) {
+	k := NewFieldKey("pi")
+	b := New(128)
+	b.BeginObject()
+	b.AddFloat64FieldKey(k, 3.14)
+	b.EndObject()
+	want := `{"pi":3.14}`
+	if got := string(b.Bytes()); got != want {
+		t.Fatalf("got %s, want %s", got, want)
+	}
+}
+
+func TestFieldKey_NullField(t *testing.T) {
+	k := NewFieldKey("absent")
+	b := New(128)
+	b.BeginObject()
+	b.AddNullFieldKey(k)
+	b.EndObject()
+	want := `{"absent":null}`
+	if got := string(b.Bytes()); got != want {
+		t.Fatalf("got %s, want %s", got, want)
+	}
+}
+
+func TestFieldKey_TimeRFC3339Field(t *testing.T) {
+	k := NewFieldKey("ts")
+	b := New(128)
+	b.BeginObject()
+	ts := time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC)
+	b.AddTimeRFC3339FieldKey(k, ts)
+	b.EndObject()
+	want := `{"ts":"2026-04-10T12:00:00Z"}`
+	if got := string(b.Bytes()); got != want {
+		t.Fatalf("got %s, want %s", got, want)
+	}
+}
+
+func TestFieldKey_MixedWithRegularFields(t *testing.T) {
+	kLevel := NewFieldKey("level")
+	b := New(128)
+	b.BeginObject()
+	b.AddStringField("msg", "hello")
+	b.AddIntFieldKey(kLevel, 3)
+	b.AddBoolField("ok", true)
+	b.EndObject()
+	want := `{"msg":"hello","level":3,"ok":true}`
+	if got := string(b.Bytes()); got != want {
+		t.Fatalf("got %s, want %s", got, want)
+	}
+}
