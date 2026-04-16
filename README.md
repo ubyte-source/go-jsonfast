@@ -241,7 +241,7 @@ See the [package documentation](https://pkg.go.dev/github.com/ubyte-source/go-js
 | Function | Description |
 |----------|-------------|
 | `EscapeString(string) string` | Escape JSON special characters (zero-alloc if no escaping needed) |
-| `IsLikelyJSON(string) bool` | Quick check if string looks like JSON object/array |
+| `IsLikelyJSON(string) bool` | SWAR-accelerated structural validation of JSON object/array |
 | `FlattenMap(m, dst map[string]string) map[string]string` | Flatten nested map to dot-notation |
 
 ### BatchWriter (NDJSON)

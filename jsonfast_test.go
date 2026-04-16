@@ -1145,16 +1145,28 @@ func TestIsLikelyJSON(t *testing.T) {
 		input string
 		want  bool
 	}{
+		// Valid JSON structures.
 		{`{"key":"value"}`, true},
 		{`[1,2,3]`, true},
 		{`{}`, true},
 		{`[]`, true},
+		{`{"a":{"b":1}}`, true},
+		{`[{"x":1},{"y":2}]`, true},
+
+		// Not JSON at all.
 		{`{`, false},
 		{`}`, false},
 		{``, false},
 		{`x`, false},
 		{`"hello"`, false},
 		{`not json`, false},
+		{`123`, false},
+
+		// Structurally invalid — matching delimiters but bad content.
+		{`{not json}`, false},
+		{`{unclosed: "string}`, false},
+		{`{"key": "value"} trailing`, false},
+		{`[1,2,]`, false},
 	}
 	for _, tt := range tests {
 		if got := IsLikelyJSON(tt.input); got != tt.want {

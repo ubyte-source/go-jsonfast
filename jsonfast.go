@@ -732,7 +732,7 @@ func (b *Builder) AddNullField(name string) {
 // AddStringMapObject writes a map[string]string as a JSON object {...} at the
 // current position. Keys are sorted for deterministic output.
 // If rawJSONKey is non-empty, values for that key are
-// embedded as raw JSON when they look like JSON (via IsLikelyJSON).
+// embedded as raw JSON when they pass structural validation (via IsLikelyJSON).
 // This method does NOT add a field name — it writes just the object.
 func (b *Builder) AddStringMapObject(m map[string]string, rawJSONKey string) {
 	b.BeginObject()
@@ -748,16 +748,32 @@ func (b *Builder) AddStringMapObject(m map[string]string, rawJSONKey string) {
 	b.EndObject()
 }
 
-// IsLikelyJSON reports whether s looks like a JSON object or array.
-// WARNING: checks only the first and last byte — does NOT validate content.
-// SAFETY: the caller MUST ensure upstream validation (e.g. from a trusted
-// parser or json.Valid on ingress) before relying on this to emit raw JSON.
-// Designed for hot-path use where []byte(s) allocation from json.Valid is unacceptable.
+// IsLikelyJSON reports whether s is a structurally valid JSON object or array
+// with no trailing content. For objects, validates "key":value grammar via the
+// SWAR-accelerated iterateRawFields parser. For arrays, validates element
+// separation via iterateRawArray. Zero allocation.
+// Does NOT validate semantic correctness (e.g., duplicate keys, number formats).
+//
+//nolint:gosec // unsafe.Slice: read-only zero-alloc string→[]byte view; s is not mutated
 func IsLikelyJSON(s string) bool {
-	if len(s) < 2 {
+	if len(s) < 2 || (s[0] != '{' && s[0] != '[') {
 		return false
 	}
-	return (s[0] == '{' && s[len(s)-1] == '}') || (s[0] == '[' && s[len(s)-1] == ']')
+	data := unsafe.Slice(unsafe.StringData(s), len(s))
+	// Grammar-validate AND reject trailing garbage: SkipValueAt returns the
+	// end position; if it doesn't consume the entire string, there's trailing
+	// content. SkipValueAt delegates to SkipBracedAt for objects/arrays, which
+	// validates balanced delimiters and strings but not key:value grammar.
+	// We run both checks: SkipValueAt for delimiter balance + no trailing,
+	// and the grammar iterator for structural correctness.
+	end, ok := SkipValueAt(data, 0)
+	if !ok || end != len(data) {
+		return false
+	}
+	if data[0] == '{' {
+		return iterateRawFields(data, func(_ []byte, _, _, _, _ int) bool { return true })
+	}
+	return iterateRawArray(data, func(_ []byte) bool { return true })
 }
 
 // EscapeString returns s with JSON special characters escaped per RFC 8259.

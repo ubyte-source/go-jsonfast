@@ -107,7 +107,9 @@ func ExampleBuilder_AddFloat64Field() {
 func ExampleIsLikelyJSON() {
 	fmt.Println(jsonfast.IsLikelyJSON(`{"key":"value"}`))
 	fmt.Println(jsonfast.IsLikelyJSON(`not json`))
+	fmt.Println(jsonfast.IsLikelyJSON(`{not json}`)) // structurally invalid
 	// Output:
 	// true
+	// false
 	// false
 }
