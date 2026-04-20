@@ -104,12 +104,48 @@ func ExampleBuilder_AddFloat64Field() {
 	// Output: {"pi":3.14159}
 }
 
-func ExampleIsLikelyJSON() {
-	fmt.Println(jsonfast.IsLikelyJSON(`{"key":"value"}`))
-	fmt.Println(jsonfast.IsLikelyJSON(`not json`))
-	fmt.Println(jsonfast.IsLikelyJSON(`{not json}`)) // structurally invalid
+func ExampleIsStructuralJSON() {
+	fmt.Println(jsonfast.IsStructuralJSON(`{"key":"value"}`))
+	fmt.Println(jsonfast.IsStructuralJSON(`not json`))
+	fmt.Println(jsonfast.IsStructuralJSON(`{not json}`)) // structurally invalid
 	// Output:
 	// true
 	// false
 	// false
+}
+
+func ExampleNewFieldKey() {
+	// Lift static field names out of the hot path.
+	var keyLevel = jsonfast.NewFieldKey("level")
+
+	b := jsonfast.New(64)
+	b.BeginObject()
+	b.AddIntFieldKey(keyLevel, 3)
+	b.EndObject()
+
+	fmt.Println(string(b.Bytes()))
+	// Output: {"level":3}
+}
+
+func ExampleWarmPool() {
+	// Pre-seed the pool before the hot path begins. Only the first
+	// Acquire after program start touches the allocator; subsequent
+	// Acquire/Release pairs are zero-alloc.
+	jsonfast.WarmPool(128)
+
+	b := jsonfast.Acquire()
+	b.BeginObject()
+	b.AddStringField("warmed", "yes")
+	b.EndObject()
+	fmt.Println(string(b.Bytes()))
+	jsonfast.Release(b)
+	// Output: {"warmed":"yes"}
+}
+
+func ExampleFindField() {
+	data := []byte(`{"hostname":"fw01","severity":4,"message":"ok"}`)
+	if val, ok := jsonfast.FindField(data, "severity"); ok {
+		fmt.Printf("severity=%s\n", val)
+	}
+	// Output: severity=4
 }

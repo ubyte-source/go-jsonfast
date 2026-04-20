@@ -10,6 +10,15 @@ import (
 	"unicode/utf8"
 )
 
+// Non-finite IEEE-754 fixtures. Declared at package scope so the other
+// test files in this package (notably alloc_test.go) can share a single
+// canonical source for NaN and ±Inf.
+var (
+	nanValue    = math.NaN()
+	posInfValue = math.Inf(1)
+	negInfValue = math.Inf(-1)
+)
+
 // ---------------------------------------------------------------------------
 // Builder lifecycle
 // ---------------------------------------------------------------------------
@@ -364,6 +373,43 @@ func TestBuilder_AddFloat64Field(t *testing.T) {
 			assertContains(t, string(b.Bytes()), tt.want)
 		})
 	}
+}
+
+// Non-finite IEEE-754 values are emitted as null: JSON (RFC 8259) has no
+// syntax for NaN or ±Inf. The property holds for both the string-keyed
+// and FieldKey-keyed entry points.
+
+func TestBuilder_AddFloat64Field_NaN(t *testing.T) {
+	b := New(32)
+	b.BeginObject()
+	b.AddFloat64Field("v", nanValue)
+	b.EndObject()
+	expect(t, `{"v":null}`, string(b.Bytes()))
+}
+
+func TestBuilder_AddFloat64Field_PosInf(t *testing.T) {
+	b := New(32)
+	b.BeginObject()
+	b.AddFloat64Field("v", posInfValue)
+	b.EndObject()
+	expect(t, `{"v":null}`, string(b.Bytes()))
+}
+
+func TestBuilder_AddFloat64Field_NegInf(t *testing.T) {
+	b := New(32)
+	b.BeginObject()
+	b.AddFloat64Field("v", negInfValue)
+	b.EndObject()
+	expect(t, `{"v":null}`, string(b.Bytes()))
+}
+
+func TestBuilder_AddFloat64FieldKey_NaN(t *testing.T) {
+	k := NewFieldKey("v")
+	b := New(32)
+	b.BeginObject()
+	b.AddFloat64FieldKey(k, nanValue)
+	b.EndObject()
+	expect(t, `{"v":null}`, string(b.Bytes()))
 }
 
 // ---------------------------------------------------------------------------
@@ -1137,10 +1183,10 @@ func TestBuilder_AddTimeRFC3339Field_AllNanoDigits(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// IsLikelyJSON
+// IsStructuralJSON
 // ---------------------------------------------------------------------------
 
-func TestIsLikelyJSON(t *testing.T) {
+func TestIsStructuralJSON(t *testing.T) {
 	tests := []struct {
 		input string
 		want  bool
@@ -1169,8 +1215,8 @@ func TestIsLikelyJSON(t *testing.T) {
 		{`[1,2,]`, false},
 	}
 	for _, tt := range tests {
-		if got := IsLikelyJSON(tt.input); got != tt.want {
-			t.Errorf("IsLikelyJSON(%q) = %v, want %v", tt.input, got, tt.want)
+		if got := IsStructuralJSON(tt.input); got != tt.want {
+			t.Errorf("IsStructuralJSON(%q) = %v, want %v", tt.input, got, tt.want)
 		}
 	}
 }
@@ -1247,6 +1293,24 @@ func TestAddStringMapObject_RawKeyNotJSON(t *testing.T) {
 	m := map[string]string{"object": "plain text"}
 	b.AddStringMapObject(m, "object")
 	expect(t, `{"object":"plain text"}`, string(b.Bytes()))
+}
+
+func TestAddStringMapObject_LargeMap(t *testing.T) {
+	// >8 entries triggers the heap-allocated sort-buffer fallback path.
+	m := make(map[string]string, 12)
+	for i := range 12 {
+		m[fmt.Sprintf("k%02d", i)] = fmt.Sprintf("v%02d", i)
+	}
+	b := New(512)
+	b.AddStringMapObject(m, "")
+	got := string(b.Bytes())
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(got), &parsed); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if len(parsed) != 12 {
+		t.Errorf("expected 12 keys, got %d", len(parsed))
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -1518,10 +1582,35 @@ func TestCivilDate_LeapYear(t *testing.T) {
 
 func TestRelease_LargeBuffer(_ *testing.T) {
 	b := Acquire()
-	// Grow buffer beyond 256 KB to ensure it's discarded.
+	// Grow buffer beyond 256 KB to ensure it is discarded by Release.
 	b.buf = make([]byte, 0, 1<<19)
 	Release(b)
-	// No assertion needed — just verify no panic.
+	// No assertion needed — only checking that Release does not panic.
+}
+
+// ---------------------------------------------------------------------------
+// WarmPool — pre-seeds the Builder pool before the hot path.
+// ---------------------------------------------------------------------------
+
+func TestWarmPool_NonPositive(_ *testing.T) {
+	// Non-positive sizes are a no-op and must not panic.
+	WarmPool(0)
+	WarmPool(-5)
+}
+
+func TestWarmPool_Primes(t *testing.T) {
+	WarmPool(16)
+	// Drain a handful of Builders and verify each is fresh and usable.
+	for range 8 {
+		b := Acquire()
+		if b == nil {
+			t.Fatal("Acquire returned nil after WarmPool")
+		}
+		if b.Len() != 0 {
+			t.Errorf("Acquire returned a non-empty Builder (len=%d)", b.Len())
+		}
+		Release(b)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -1688,4 +1777,17 @@ func TestFieldKey_MixedWithRegularFields(t *testing.T) {
 	if got := string(b.Bytes()); got != want {
 		t.Fatalf("got %s, want %s", got, want)
 	}
+}
+
+// FieldKey is an exported named string type, so values can also be
+// constructed from an untyped string literal matching the documented
+// `,"name":` layout. This test guards the literal form against accidental
+// internal representation changes.
+func TestFieldKey_ConstLiteral(t *testing.T) {
+	const k FieldKey = `,"hello":`
+	b := New(64)
+	b.BeginObject()
+	b.AddStringFieldKey(k, "world")
+	b.EndObject()
+	expect(t, `{"hello":"world"}`, string(b.Bytes()))
 }

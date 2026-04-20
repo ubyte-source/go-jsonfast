@@ -122,6 +122,31 @@ func TestAcquireBatchWriter_Reuse(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// WarmBatchWriterPool — pre-seeds the BatchWriter pool before the hot path.
+// ---------------------------------------------------------------------------
+
+func TestWarmBatchWriterPool_NonPositive(_ *testing.T) {
+	// Non-positive sizes are a no-op and must not panic.
+	WarmBatchWriterPool(0)
+	WarmBatchWriterPool(-1)
+}
+
+func TestWarmBatchWriterPool_Primes(t *testing.T) {
+	WarmBatchWriterPool(8)
+	// Drain a handful of writers and verify each is fresh and usable.
+	for range 4 {
+		bw := AcquireBatchWriter()
+		if bw == nil {
+			t.Fatal("AcquireBatchWriter returned nil after WarmBatchWriterPool")
+		}
+		if bw.Len() != 0 {
+			t.Errorf("AcquireBatchWriter returned non-empty (len=%d)", bw.Len())
+		}
+		ReleaseBatchWriter(bw)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Benchmarks
 // ---------------------------------------------------------------------------
 

@@ -543,7 +543,7 @@ func TestSkipStringAt_LongStringWithControlChar(t *testing.T) {
 }
 
 func TestSkipStringAt_VeryLongSafe(t *testing.T) {
-	// 64 safe bytes — exercises the 16-byte SWAR unrolled loop fully.
+	// 64 safe bytes — exercises the SWAR 8-byte stride across multiple words.
 	buf := make([]byte, 66)
 	buf[0] = '"'
 	for i := 1; i <= 64; i++ {
@@ -566,9 +566,9 @@ func TestSkipStringAt_EscapeIn2ndWord(t *testing.T) {
 }
 
 func TestSkipStringAt_QuoteIn2ndSWARWord(t *testing.T) {
-	// j starts at 1; we need j+16 <= n.
-	// 8 safe bytes for w1, then closing quote in w2 at position 9.
-	// Total data: 1(open) + 8(safe) + 1(close) + 7(pad) = 17 bytes.
+	// 8 safe bytes fill the first SWAR word; the closing quote lands in
+	// the second SWAR word at position 9. Padding ensures the SWAR loop
+	// has at least one full word past the quote to consider.
 	buf := make([]byte, 17)
 	buf[0] = '"'
 	for i := 1; i <= 8; i++ {
@@ -846,6 +846,22 @@ func TestIterateStringArray_SingleID(t *testing.T) {
 	}
 }
 
+func TestIterateStringArray_EmptyString(t *testing.T) {
+	// len(elem) == 2 is the "" edge case. The callback receives "".
+	data := []byte(`["",""]`)
+	var got []string
+	ok := IterateStringArray(data, func(val string) bool {
+		got = append(got, val)
+		return true
+	})
+	if !ok {
+		t.Fatal("expected ok")
+	}
+	if len(got) != 2 || got[0] != "" || got[1] != "" {
+		t.Errorf("got %v, want [\"\", \"\"]", got)
+	}
+}
+
 func TestIterateStringArray_ManyIDs(t *testing.T) {
 	data := []byte(`["id-1","id-2","id-3","id-4","id-5"]`)
 	var got []string
@@ -917,72 +933,6 @@ func BenchmarkIterateArray_NestedObjects(b *testing.B) {
 	b.ResetTimer()
 	for b.Loop() {
 		IterateArray(data, func(_ []byte) bool { return true })
-	}
-}
-
-// ---------------------------------------------------------------------------
-// IterateStringArrayUnsafe tests
-// ---------------------------------------------------------------------------
-
-func TestIterateStringArrayUnsafe_Basic(t *testing.T) {
-	data := []byte(`["a","bb","ccc"]`)
-	var got []string
-	ok := IterateStringArrayUnsafe(data, func(val string) bool {
-		got = append(got, val) // intentionally escapes — test correctness, not safety
-		return true
-	})
-	if !ok {
-		t.Fatal("expected ok")
-	}
-	want := []string{"a", "bb", "ccc"}
-	if len(got) != len(want) {
-		t.Fatalf("len=%d, want %d", len(got), len(want))
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("[%d]=%q, want %q", i, got[i], want[i])
-		}
-	}
-}
-
-func TestIterateStringArrayUnsafe_Empty(t *testing.T) {
-	if !IterateStringArrayUnsafe([]byte(`[]`), func(_ string) bool { return true }) {
-		t.Fatal("expected ok for empty array")
-	}
-}
-
-func TestIterateStringArrayUnsafe_NonString(t *testing.T) {
-	if IterateStringArrayUnsafe([]byte(`["a",42]`), func(_ string) bool { return true }) {
-		t.Fatal("expected false for non-string element")
-	}
-}
-
-func BenchmarkIterateStringArrayUnsafe_10(b *testing.B) {
-	data := []byte(`["alpha","bravo","charlie","delta","echo","foxtrot","golf","hotel","india","juliet"]`)
-	b.ReportAllocs()
-	b.SetBytes(int64(len(data)))
-	b.ResetTimer()
-	for b.Loop() {
-		IterateStringArrayUnsafe(data, func(_ string) bool { return true })
-	}
-}
-
-func BenchmarkIterateStringArrayUnsafe_100(b *testing.B) {
-	buf := []byte{'['}
-	for i := range 100 {
-		if i > 0 {
-			buf = append(buf, ',')
-		}
-		buf = append(buf, '"')
-		buf = append(buf, []byte("id-"+string(rune('A'+i%26))+"-item")...)
-		buf = append(buf, '"')
-	}
-	buf = append(buf, ']')
-	b.ReportAllocs()
-	b.SetBytes(int64(len(buf)))
-	b.ResetTimer()
-	for b.Loop() {
-		IterateStringArrayUnsafe(buf, func(_ string) bool { return true })
 	}
 }
 

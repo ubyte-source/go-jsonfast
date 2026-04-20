@@ -27,12 +27,14 @@ The library is fuzz-tested continuously with Go's built-in fuzzer.
 
 ## Known Limits
 
-The builder enforces the following bounds to prevent resource exhaustion:
+The library enforces the following bounds to prevent resource exhaustion:
 
-| Parameter | Limit | Constant |
-|-----------|-------|----------|
-| Maximum pooled buffer size | 256 KiB | `1<<18` |
-| Maximum flatten depth | 64 levels | `maxFlattenDepth` |
+| Parameter | Limit |
+|-----------|-------|
+| Builder pool max retained buffer | 256 KiB |
+| BatchWriter pool max retained buffer | 4 MiB |
+| `FlattenObject` maximum depth | 64 levels |
 
-Buffers exceeding the pool limit are discarded on `Release` to avoid holding large memory.
-Inputs nested beyond the flatten depth limit cause `FlattenObject` to return `false`.
+Buffers exceeding the pool limit are discarded on `Release` to avoid
+holding large memory. Inputs nested beyond the flatten depth limit cause
+`FlattenObject` to return `false`.

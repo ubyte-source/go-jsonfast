@@ -100,7 +100,7 @@ func TestAddFlattenedMapField_Empty(t *testing.T) {
 }
 
 func TestFlattenMap_ManyEntries(t *testing.T) {
-	// >16 total entries to trigger the heap-allocated spans path.
+	// Exercise FlattenMap with 20 entries across 4 outer keys.
 	m := map[string]map[string]string{
 		"a": {}, "b": {}, "c": {}, "d": {},
 	}

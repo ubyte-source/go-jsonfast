@@ -2,8 +2,8 @@ package jsonfast
 
 import "unsafe"
 
-// wsTable marks whitespace bytes (space, \n, \r, \t) as true.
-// Using a lookup table eliminates multi-branch checks in SkipWS.
+// wsTable marks ASCII whitespace (space, \n, \r, \t) as true. Using a
+// lookup table eliminates the multi-branch character classifier in SkipWS.
 var wsTable = [256]bool{
 	' ':  true,
 	'\n': true,
@@ -20,8 +20,8 @@ func SkipWS(data []byte, i int) int {
 	return i
 }
 
-// SkipValueAt skips a complete JSON value starting at data[i].
-// Returns the index past the value and true, or (i, false) on error.
+// SkipValueAt skips a complete JSON value starting at data[i]. Returns
+// the index past the value and true, or (i, false) on error.
 func SkipValueAt(data []byte, i int) (int, bool) {
 	i = SkipWS(data, i)
 	if i >= len(data) {
@@ -34,78 +34,79 @@ func SkipValueAt(data []byte, i int) (int, bool) {
 		return SkipBracedAt(data, i, '{', '}')
 	case '[':
 		return SkipBracedAt(data, i, '[', ']')
-	default:
-		for j := i; j < len(data); j++ {
-			switch data[j] {
-			case ',', '}', ']', ' ', '\n', '\r', '\t':
-				return j, j > i
-			}
-		}
-		return len(data), len(data) > i
 	}
+	return skipScalar(data, i)
+}
+
+// skipScalar scans a bare JSON scalar (number/bool/null). It stops at
+// the first separator (',', '}', ']', whitespace) and returns the
+// boundary position. Content is not validated beyond framing.
+func skipScalar(data []byte, i int) (int, bool) {
+	for j := i; j < len(data); j++ {
+		switch data[j] {
+		case ',', '}', ']', ' ', '\n', '\r', '\t':
+			return j, j > i
+		}
+	}
+	return len(data), len(data) > i
 }
 
 // SkipStringAt finds the end of a JSON string starting at data[i].
-// data[i] must be '"'. Returns the index past the closing quote.
-// Rejects raw control chars (< 0x20) per RFC 8259.
-// Uses swarSpecialSkip (see swar.go) for the detection formula.
-//
-//nolint:gosec,gocognit,cyclop // unsafe for SWAR throughput; complexity from unrolled SWAR loop
+// data[i] must be '"'. Returns the index past the closing quote. Rejects
+// raw control chars (< 0x20) per RFC 8259.
 func SkipStringAt(data []byte, i int) (int, bool) {
 	if i >= len(data) || data[i] != '"' {
 		return i, false
 	}
-	j := i + 1
 	n := len(data)
+	j := swarSkipStringBulk(data, i+1, n)
+	return scanStringTail(data, j, n)
+}
 
-	if n-j >= 8 {
-		p := unsafe.Pointer(unsafe.SliceData(data))
-		for j+16 <= n {
-			w1 := *(*uint64)(unsafe.Add(p, j))
-			if swarSpecialSkip(w1) != 0 {
-				break
-			}
-			w2 := *(*uint64)(unsafe.Add(p, j+8))
-			if swarSpecialSkip(w2) != 0 {
-				j += 8
-				break
-			}
-			j += 16
-		}
-		for j+8 <= n {
-			w := *(*uint64)(unsafe.Add(p, j))
-			if swarSpecialSkip(w) != 0 {
-				break
-			}
-			j += 8
-		}
+// swarSkipStringBulk advances j past 8-byte words that contain no '"',
+// '\\', or control byte, stopping at the first word that does.
+//
+//nolint:gosec // unsafe pointer math is load-bearing for SWAR throughput
+func swarSkipStringBulk(data []byte, j, n int) int {
+	if n-j < 8 {
+		return j
 	}
+	p := unsafe.Pointer(unsafe.SliceData(data))
+	for j+8 <= n {
+		w := *(*uint64)(unsafe.Add(p, j))
+		if swarSpecialSkip(w) != 0 {
+			return j
+		}
+		j += 8
+	}
+	return j
+}
 
+// scanStringTail walks the remainder of a JSON string byte-by-byte,
+// handling escape sequences and rejecting raw control chars.
+func scanStringTail(data []byte, j, n int) (int, bool) {
 	for j < n {
 		c := data[j]
-		if c == '"' {
+		switch {
+		case c == '"':
 			return j + 1, true
-		}
-		if c == '\\' {
+		case c == '\\':
 			if j+1 >= n {
 				return j, false
 			}
 			j += 2
-			continue
-		}
-		if c < 0x20 {
+		case c < 0x20:
 			return j, false
+		default:
+			j++
 		}
-		j++
 	}
 	return j, false
 }
 
 // SkipBracedAt skips a balanced delimiter pair starting at data[i].
-// Delegates string scanning to SkipStringAt for SWAR throughput.
-// For non-string, non-bracket content, uses SWAR to skip 8 bytes at a time.
-//
-//nolint:gosec,gocognit,cyclop // unsafe for SWAR throughput; complexity from SWAR+parser logic
+// Delegates string scanning to SkipStringAt for SWAR throughput. For
+// non-string, non-bracket content, uses SWAR to skip 8 bytes at a time.
 func SkipBracedAt(data []byte, i int, opener, closer byte) (int, bool) {
 	if i >= len(data) || data[i] != opener {
 		return i, false
@@ -113,142 +114,183 @@ func SkipBracedAt(data []byte, i int, opener, closer byte) (int, bool) {
 	depth := 1
 	i++
 	n := len(data)
-	p := unsafe.Pointer(unsafe.SliceData(data))
-
-	// Pre-compute broadcast masks outside the loop to avoid repeated multiplies.
 	swarOpener := swarLo * uint64(opener)
 	swarCloser := swarLo * uint64(closer)
 
 	for i < n {
-		// SWAR: skip 8 bytes at a time when no special chars present.
-		if n-i >= 8 {
-			for i+8 <= n {
-				w := *(*uint64)(unsafe.Add(p, i))
-				xq := w ^ swarQuote
-				xb := w ^ swarBackslash
-				xo := w ^ swarOpener
-				xc := w ^ swarCloser
-				hasSpecial := (xq-swarLo)&^xq&swarHi |
-					(xb-swarLo)&^xb&swarHi |
-					(xo-swarLo)&^xo&swarHi |
-					(xc-swarLo)&^xc&swarHi
-
-				if hasSpecial != 0 {
-					break
-				}
-				i += 8
-			}
-		}
-
+		i = swarSkipBracedBulk(data, i, n, swarOpener, swarCloser)
 		if i >= n {
 			break
 		}
-
-		switch data[i] {
-		case '"':
-			end, ok := SkipStringAt(data, i)
-			if !ok {
-				return i, false
-			}
-			i = end
-		case opener:
-			depth++
-			i++
-		case closer:
-			depth--
-			if depth == 0 {
-				return i + 1, true
-			}
-			i++
-		default:
-			i++
+		next, done, ok := stepBraced(data, i, opener, closer, &depth)
+		if !ok {
+			return i, false
 		}
+		if done {
+			return next, true
+		}
+		i = next
 	}
 	return i, false
 }
 
-// iterateRawFields is the core field iterator. It parses a JSON object and
-// calls fn(data, keyStart, keyEnd, valueStart, valueEnd) for each field.
-// fn returns true to continue, false to stop. If fn returns false,
-// iterateRawFields returns the index past the value and false.
-// This single implementation eliminates the duplicated parsing logic
-// that was previously in IterateFields, FindField, and flattenObject.
+// stepBraced advances one byte within SkipBracedAt. done indicates the
+// matching closer was reached; ok is false on a parse error.
+func stepBraced(data []byte, i int, opener, closer byte, depth *int) (next int, done, ok bool) {
+	switch data[i] {
+	case '"':
+		end, sok := SkipStringAt(data, i)
+		if !sok {
+			return i, false, false
+		}
+		return end, false, true
+	case opener:
+		*depth++
+		return i + 1, false, true
+	case closer:
+		*depth--
+		if *depth == 0 {
+			return i + 1, true, true
+		}
+		return i + 1, false, true
+	default:
+		return i + 1, false, true
+	}
+}
+
+// swarSkipBracedBulk advances i past 8-byte words that contain none of
+// '"', '\\', opener, closer, stopping at the first word that does.
 //
-//nolint:gocognit,gocyclo,cyclop,funlen // single-pass JSON object scanner
-func iterateRawFields(data []byte, fn func(data []byte, ks, ke, vs, ve int) bool) bool {
+//nolint:gosec // unsafe pointer math is load-bearing for SWAR throughput
+func swarSkipBracedBulk(data []byte, i, n int, swarOpener, swarCloser uint64) int {
+	if n-i < 8 {
+		return i
+	}
+	p := unsafe.Pointer(unsafe.SliceData(data))
+	for i+8 <= n {
+		w := *(*uint64)(unsafe.Add(p, i))
+		xq := w ^ swarQuote
+		xb := w ^ swarBackslash
+		xo := w ^ swarOpener
+		xc := w ^ swarCloser
+		hasSpecial := (xq-swarLo)&^xq&swarHi |
+			(xb-swarLo)&^xb&swarHi |
+			(xo-swarLo)&^xo&swarHi |
+			(xc-swarLo)&^xc&swarHi
+		if hasSpecial != 0 {
+			return i
+		}
+		i += 8
+	}
+	return i
+}
+
+// iterateRawFields scans a JSON object and invokes fn for each field.
+// Returns the index past the closing '}' and whether the scan completed.
+// fn returning false aborts the scan; the aborted position is reported
+// with ok=false.
+func iterateRawFields(data []byte, fn func(d []byte, ks, ke, vs, ve int) bool) (end int, ok bool) {
 	i := SkipWS(data, 0)
 	if i >= len(data) || data[i] != '{' {
-		return false
+		return i, false
 	}
 	i++
 
 	for {
 		i = SkipWS(data, i)
 		if i >= len(data) {
-			return false
+			return i, false
 		}
 		if data[i] == '}' {
-			return true
+			return i + 1, true
 		}
-		if data[i] != '"' {
-			return false
+		fp, next, pok := parseField(data, i)
+		if !pok {
+			return next, false
 		}
-
-		keyStart := i
-		keyEnd, ok := SkipStringAt(data, i)
-		if !ok {
-			return false
+		i = next
+		if !fn(data, fp.ks, fp.ke, fp.vs, fp.ve) {
+			return i, false
 		}
-		i = keyEnd
-
-		i = SkipWS(data, i)
-		if i >= len(data) || data[i] != ':' {
-			return false
+		next, done, sok := stepAfterField(data, i)
+		if !sok {
+			return next, false
 		}
-		i++
-		i = SkipWS(data, i)
-		if i >= len(data) {
-			return false
+		if done {
+			return next, true
 		}
-
-		valueStart := i
-		valueEnd, ok := SkipValueAt(data, i)
-		if !ok {
-			return false
-		}
-		i = valueEnd
-
-		if !fn(data, keyStart, keyEnd, valueStart, valueEnd) {
-			return false
-		}
-
-		i = SkipWS(data, i)
-		if i >= len(data) {
-			return false
-		}
-		switch data[i] {
-		case ',':
-			i++
-		case '}':
-			return true
-		default:
-			return false
-		}
+		i = next
 	}
 }
 
-// IterateFields calls fn for each top-level key-value pair in a JSON object.
-// key includes quotes, value is the raw JSON bytes.
-// Returns false if the JSON is malformed or fn returns false.
-func IterateFields(data []byte, fn func(key, value []byte) bool) bool {
-	return iterateRawFields(data, func(d []byte, ks, ke, vs, ve int) bool {
-		return fn(d[ks:ke], d[vs:ve])
-	})
+// fieldPos holds the start/end offsets of a parsed "key":value pair.
+// Positions are relative to the original data slice; ke sits just past
+// the closing quote of the key and ve sits just past the final byte of
+// the value (which is also the cursor position for the next field).
+type fieldPos struct {
+	ks, ke, vs, ve int
 }
 
-// IterateFieldsString is like IterateFields but accepts a string,
-// avoiding the []byte(string) allocation. The callback slices share
-// the string's backing memory and must not be mutated.
+// parseField reads one "key":value pair starting at i. On success,
+// returns the pair positions and ok=true. On failure, returns
+// (_, i-position-of-error, false).
+func parseField(data []byte, i int) (fieldPos, int, bool) {
+	if data[i] != '"' {
+		return fieldPos{}, i, false
+	}
+	ks := i
+	ke, sok := SkipStringAt(data, i)
+	if !sok {
+		return fieldPos{}, i, false
+	}
+	i = SkipWS(data, ke)
+	if i >= len(data) || data[i] != ':' {
+		return fieldPos{}, i, false
+	}
+	i++
+	i = SkipWS(data, i)
+	if i >= len(data) {
+		return fieldPos{}, i, false
+	}
+	vs := i
+	ve, vok := SkipValueAt(data, i)
+	if !vok {
+		return fieldPos{}, i, false
+	}
+	return fieldPos{ks, ke, vs, ve}, ve, true
+}
+
+// stepAfterField consumes whitespace and the separator following a
+// field value. done is true when the enclosing object's '}' is reached;
+// ok is false on malformed input.
+func stepAfterField(data []byte, i int) (next int, done, ok bool) {
+	i = SkipWS(data, i)
+	if i >= len(data) {
+		return i, false, false
+	}
+	switch data[i] {
+	case ',':
+		return i + 1, false, true
+	case '}':
+		return i + 1, true, true
+	default:
+		return i, false, false
+	}
+}
+
+// IterateFields calls fn for each top-level key-value pair in a JSON
+// object. key includes the surrounding quotes; value is the raw JSON
+// bytes. Returns false if the JSON is malformed or fn returns false.
+func IterateFields(data []byte, fn func(key, value []byte) bool) bool {
+	_, ok := iterateRawFields(data, func(d []byte, ks, ke, vs, ve int) bool {
+		return fn(d[ks:ke], d[vs:ve])
+	})
+	return ok
+}
+
+// IterateFieldsString is IterateFields over a string, avoiding the
+// []byte conversion. The slices passed to fn alias the string's backing
+// memory and must not be mutated.
 //
 //nolint:gosec // unsafe usage intentional: zero-alloc string→[]byte view
 func IterateFieldsString(s string, fn func(key, value []byte) bool) bool {
@@ -259,27 +301,51 @@ func IterateFieldsString(s string, fn func(key, value []byte) bool) bool {
 	return IterateFields(data, fn)
 }
 
-// FindField finds a top-level field by key name in a JSON object.
-// Returns the raw value bytes and true, or (nil, false) if not found
-// or the JSON is malformed.
+// FindField looks up a top-level field by key in a JSON object. Returns
+// the raw value bytes and true on match, or (nil, false) if not found
+// or the JSON is malformed. Implemented as a direct scanner without a
+// callback so the match-comparison and early-return are inlined.
 func FindField(data []byte, key string) ([]byte, bool) {
-	keyWithQuotes := len(key) + 2
-	var result []byte
-	var found bool
-	iterateRawFields(data, func(d []byte, ks, ke, vs, ve int) bool {
-		if ke-ks == keyWithQuotes && string(d[ks+1:ke-1]) == key {
-			result = d[vs:ve]
-			found = true
-			return false // stop iteration
+	i := SkipWS(data, 0)
+	if i >= len(data) || data[i] != '{' {
+		return nil, false
+	}
+	i++
+	for {
+		i = SkipWS(data, i)
+		if atObjectEnd(data, i) {
+			return nil, false
 		}
-		return true
-	})
-	return result, found
+		fp, next, pok := parseField(data, i)
+		if !pok {
+			return nil, false
+		}
+		if matchesKey(data, fp, key) {
+			return data[fp.vs:fp.ve], true
+		}
+		nx, done, sok := stepAfterField(data, next)
+		if !sok || done {
+			return nil, false
+		}
+		i = nx
+	}
 }
 
-// FindFieldString is like FindField but accepts a string input,
-// avoiding the []byte(string) allocation. The returned slice shares
-// the string's backing memory and must not be mutated.
+// atObjectEnd reports whether the cursor is past the end of data or
+// sitting on a closing '}'.
+func atObjectEnd(data []byte, i int) bool {
+	return i >= len(data) || data[i] == '}'
+}
+
+// matchesKey reports whether the quoted key at fp.ks..fp.ke equals key.
+// The unquoted key is data[fp.ks+1 : fp.ke-1].
+func matchesKey(data []byte, fp fieldPos, key string) bool {
+	return fp.ke-2-fp.ks == len(key) && string(data[fp.ks+1:fp.ke-1]) == key
+}
+
+// FindFieldString is FindField over a string input, avoiding the
+// []byte conversion allocation. The returned slice aliases the string's
+// backing memory and must not be mutated.
 //
 //nolint:gosec // unsafe usage intentional: zero-alloc string→[]byte view
 func FindFieldString(s, key string) ([]byte, bool) {
@@ -290,24 +356,15 @@ func FindFieldString(s, key string) ([]byte, bool) {
 	return FindField(data, key)
 }
 
-// AddRawBytesField adds a "name":value field where name is raw bytes
-// (without quotes) and value is raw JSON bytes. Zero allocation.
-func (b *Builder) AddRawBytesField(name, value []byte) {
-	b.sep()
-	b.buf = append(b.buf, '"')
-	b.buf = append(b.buf, name...)
-	b.buf = append(b.buf, '"', ':')
-	b.buf = append(b.buf, value...)
-}
-
-// maxFlattenDepth limits recursion in FlattenObject to prevent
-// stack overflow from maliciously nested input.
+// maxFlattenDepth bounds recursion in FlattenObject to defend against
+// pathological input.
 const maxFlattenDepth = 64
 
-// FlattenObject recursively flattens a nested JSON object into the Builder's
-// current object. Nested objects are recursed up to 64 levels deep;
-// leaf values are emitted as top-level fields. Non-object input is silently skipped.
-// Returns false if the JSON is malformed or nesting exceeds the depth limit.
+// FlattenObject recursively flattens a nested JSON object into the
+// Builder's current object. Nested objects are recursed up to 64 levels
+// deep; leaf values are emitted as top-level fields. Non-object input
+// is silently skipped. Returns false if the JSON is malformed or the
+// nesting exceeds the depth limit.
 func FlattenObject(b *Builder, data []byte) bool {
 	return flattenObject(b, data, 0)
 }
@@ -321,115 +378,120 @@ func flattenObject(b *Builder, data []byte, depth int) bool {
 		return true // non-object: skip silently
 	}
 	callbackOK := true
-	parseOK := iterateRawFields(data, func(d []byte, ks, ke, vs, ve int) bool {
+	_, parseOK := iterateRawFields(data, func(d []byte, ks, ke, vs, ve int) bool {
 		valueRaw := d[vs:ve]
 		if len(valueRaw) > 0 && valueRaw[0] == '{' {
 			if !flattenObject(b, valueRaw, depth+1) {
 				callbackOK = false
 				return false
 			}
-		} else {
-			b.AddRawBytesField(d[ks+1:ke-1], valueRaw)
+			return true
 		}
+		b.AddRawBytesField(d[ks+1:ke-1], valueRaw)
 		return true
 	})
 	return parseOK && callbackOK
 }
 
-// iterateRawArray is the core array iterator. It parses a JSON array and
-// calls fn(data[vs:ve]) for each element. fn returns true to continue,
-// false to stop.
-//
-//nolint:cyclop // single-pass JSON array scanner — mirrors iterateRawFields pattern
-func iterateRawArray(data []byte, fn func(element []byte) bool) bool {
-	i := SkipWS(data, 0)
-	if i >= len(data) || data[i] != '[' {
-		return false
+// iterateRawArray scans a JSON array and invokes fn for each element.
+// Returns the index past the closing ']' and whether the scan completed.
+func iterateRawArray(data []byte, fn func(element []byte) bool) (end int, ok bool) {
+	i, empty, oopen := openArray(data)
+	if !oopen {
+		return i, false
 	}
-	i++
-
-	i = SkipWS(data, i)
-	if i >= len(data) {
-		return false
+	if empty {
+		return i, true
 	}
-	if data[i] == ']' {
-		return true
-	}
-
 	for {
 		vs := i
-		ve, ok := SkipValueAt(data, i)
-		if !ok {
-			return false
+		ve, vok := SkipValueAt(data, i)
+		if !vok {
+			return i, false
 		}
 		i = ve
-
 		if !fn(data[vs:ve]) {
-			return false
+			return i, false
 		}
-
-		i = SkipWS(data, i)
-		if i >= len(data) {
-			return false
+		next, done, sok := stepAfterArrayElement(data, i)
+		if !sok {
+			return next, false
 		}
-		switch data[i] {
-		case ',':
-			i++
-			i = SkipWS(data, i)
-		case ']':
-			return true
-		default:
-			return false
+		if done {
+			return next, true
 		}
+		i = next
 	}
 }
 
-// IterateArray calls fn for each element in a JSON array.
-// element is the raw JSON bytes of each value (string with quotes,
-// number, bool, null, nested object, or nested array).
-// Returns false if the JSON is malformed or fn returns false.
+// openArray consumes the opening '[' and any leading whitespace. It
+// reports empty=true if the array closes immediately (next is the index
+// past ']'); otherwise next points at the first element byte.
+func openArray(data []byte) (next int, empty, ok bool) {
+	i := SkipWS(data, 0)
+	if i >= len(data) || data[i] != '[' {
+		return i, false, false
+	}
+	i = SkipWS(data, i+1)
+	if i >= len(data) {
+		return i, false, false
+	}
+	if data[i] == ']' {
+		return i + 1, true, true
+	}
+	return i, false, true
+}
+
+// stepAfterArrayElement consumes whitespace and the separator following
+// an array element. done is true when the enclosing ']' is reached; ok
+// is false on malformed input.
+func stepAfterArrayElement(data []byte, i int) (next int, done, ok bool) {
+	i = SkipWS(data, i)
+	if i >= len(data) {
+		return i, false, false
+	}
+	switch data[i] {
+	case ',':
+		return SkipWS(data, i+1), false, true
+	case ']':
+		return i + 1, true, true
+	default:
+		return i, false, false
+	}
+}
+
+// IterateArray calls fn for each element in a JSON array. element is
+// the raw JSON bytes of each value (string with quotes, number, bool,
+// null, nested object, nested array). Returns false if the JSON is
+// malformed or fn returns false.
 func IterateArray(data []byte, fn func(element []byte) bool) bool {
-	return iterateRawArray(data, fn)
+	_, ok := iterateRawArray(data, fn)
+	return ok
 }
 
 // IterateStringArray calls fn for each string element in a JSON array.
-// val is the unquoted string content (safe copy). Non-string elements
-// cause the iteration to return false (type mismatch).
-// Returns false if the JSON is malformed, a non-string element is found,
-// or fn returns false.
+// val is a zero-allocation view aliasing the input; it is only valid
+// for the duration of the callback. Use strings.Clone(val) in fn to
+// retain the value beyond the call.
 //
-// Each val is a safe copy; use IterateStringArrayUnsafe for zero-alloc
-// iteration when the string is not retained beyond the callback.
+// Non-string elements cause the iteration to abort and return false.
+//
+//nolint:gosec // unsafe.String intentional: zero-alloc borrow into data
 func IterateStringArray(data []byte, fn func(val string) bool) bool {
 	return IterateArray(data, func(elem []byte) bool {
 		if len(elem) < 2 || elem[0] != '"' || elem[len(elem)-1] != '"' {
-			return false // not a string element
-		}
-		return fn(string(elem[1 : len(elem)-1]))
-	})
-}
-
-// IterateStringArrayUnsafe is like IterateStringArray but returns a
-// zero-allocation string that aliases the input data slice.
-//
-// SAFETY: the string passed to fn is only valid for the duration of that
-// callback invocation. Do NOT store, append, or let it escape. If you need
-// to keep the value, copy it: saved = strings.Clone(val).
-//
-//nolint:gosec // unsafe.String intentional: zero-alloc string view into data
-func IterateStringArrayUnsafe(data []byte, fn func(val string) bool) bool {
-	return IterateArray(data, func(elem []byte) bool {
-		if len(elem) < 2 || elem[0] != '"' || elem[len(elem)-1] != '"' {
 			return false
+		}
+		if len(elem) == 2 {
+			return fn("")
 		}
 		return fn(unsafe.String(&elem[1], len(elem)-2))
 	})
 }
 
-// IterateArrayString is like IterateArray but accepts a string input,
-// avoiding the []byte(string) allocation. The callback slices share
-// the string's backing memory and must not be mutated.
-// Returns false if the JSON is malformed or fn returns false.
+// IterateArrayString is IterateArray over a string, avoiding the
+// []byte conversion. The slice passed to fn aliases the string's
+// backing memory and must not be mutated.
 //
 //nolint:gosec // unsafe usage intentional: zero-alloc string→[]byte view
 func IterateArrayString(s string, fn func(element []byte) bool) bool {
@@ -440,11 +502,8 @@ func IterateArrayString(s string, fn func(element []byte) bool) bool {
 	return IterateArray(data, fn)
 }
 
-// IterateStringArrayString is like IterateStringArray but accepts a string
-// input, avoiding the []byte(string) allocation at the caller level.
-// Each val is still a safe copy.
-// Returns false if the JSON is malformed, a non-string element is found,
-// or fn returns false.
+// IterateStringArrayString is IterateStringArray over a string input.
+// See IterateStringArray for val lifetime rules.
 //
 //nolint:gosec // unsafe usage intentional: zero-alloc string→[]byte view
 func IterateStringArrayString(s string, fn func(val string) bool) bool {
@@ -454,3 +513,36 @@ func IterateStringArrayString(s string, fn func(val string) bool) bool {
 	data := unsafe.Slice(unsafe.StringData(s), len(s))
 	return IterateStringArray(data, fn)
 }
+
+// IsStructuralJSON reports whether s is a structurally valid JSON object
+// or array with no trailing content. Grammar is validated in a single
+// pass: objects require well-formed key:value pairs with commas; arrays
+// require well-formed values with commas. Zero allocation.
+//
+// Does NOT validate semantic correctness (e.g., duplicate keys, number
+// formats, escape sequences beyond framing).
+//
+//nolint:gosec // unsafe.Slice: zero-alloc string→[]byte view; s is read-only
+func IsStructuralJSON(s string) bool {
+	if len(s) < 2 || (s[0] != '{' && s[0] != '[') {
+		return false
+	}
+	data := unsafe.Slice(unsafe.StringData(s), len(s))
+	var end int
+	var ok bool
+	if data[0] == '{' {
+		end, ok = iterateRawFields(data, nopFieldCallback)
+	} else {
+		end, ok = iterateRawArray(data, nopArrayCallback)
+	}
+	return ok && end == len(data)
+}
+
+// nopFieldCallback / nopArrayCallback are package-level no-op callbacks
+// used by IsStructuralJSON. Declaring them at package scope prevents
+// per-call closure construction and keeps IsStructuralJSON allocation-free
+// even when its inputs are heap-backed.
+var (
+	nopFieldCallback = func(_ []byte, _, _, _, _ int) bool { return true }
+	nopArrayCallback = func(_ []byte) bool { return true }
+)

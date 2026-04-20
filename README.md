@@ -1,82 +1,32 @@
 # go-jsonfast
 
-> A zero-allocation JSON builder for Go, optimized for fixed schemas and high-throughput pipelines.
+> A zero-allocation JSON builder and scanner for Go, tailored for fixed
+> schemas and ultra-high-throughput pipelines.
 
 [![Go Version](https://img.shields.io/badge/Go-1.25+-blue.svg)](https://golang.org)
 [![Go Reference](https://pkg.go.dev/badge/github.com/ubyte-source/go-jsonfast.svg)](https://pkg.go.dev/github.com/ubyte-source/go-jsonfast)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 [![Zero Dependencies](https://img.shields.io/badge/Dependencies-0-brightgreen.svg)](go.mod)
 
-## 🏗 Architecture Overview
+## Features
 
-```mermaid
-graph TB
-    subgraph "Input"
-        Fields["Field values"]
-        Maps["Nested maps"]
-        Times["Timestamps"]
-    end
-
-    subgraph "Builder Layer"
-        Builder["Builder"]
-        Escape["escapeString (SWAR)"]
-        IntFmt["appendInt / appendUint"]
-        TimeFmt["AddTimeRFC3339Field"]
-    end
-
-    subgraph "Output Layer"
-        Bytes["Bytes()"]
-        Pool["Acquire / Release"]
-    end
-
-    subgraph "Batching Layer"
-        BatchWriter["BatchWriter (NDJSON)"]
-    end
-
-    subgraph "Utilities"
-        Flatten["FlattenMap"]
-        FlatDirect["AddFlattenedMapField"]
-        EscapeStr["EscapeString"]
-        IsJSON["IsLikelyJSON"]
-    end
-
-    Fields --> Builder
-    Maps --> Builder
-    Times --> Builder
-    Builder --> Escape
-    Builder --> IntFmt
-    Builder --> TimeFmt
-    Builder --> Bytes
-    Pool --> Builder
-    Bytes --> BatchWriter
-    Maps --> Flatten
-    Maps --> FlatDirect
-    FlatDirect --> Builder
-```
-
-## ✨ Key Features
-
-- 🚀 **Zero Allocations** — all methods operate on a reusable `[]byte` buffer — no copies on the hot path
-- 🧱 **Pure Go** — no external dependencies, no code generation, no cgo
-- 📋 **RFC 8259 Compliant** — JSON string escaping with invalid UTF-8 → U+FFFD replacement
-- ⚡ **SWAR String Scanning** — word-at-a-time (8 bytes) fast path for safe ASCII runs
-- 🕐 **Hand-Written RFC 3339** — time formatting without `time.Format` allocations
-- 📊 **Sorted Map Output** — deterministic JSON for caching and deduplication
-- 📦 **NDJSON BatchWriter** — batch multiple records for message brokers
-- 🗺️ **Map Flattening** — nested `map[string]map[string]string` to dot-notation keys
-- 🧬 **Fuzz-Tested** — continuous Go native fuzzing for `escapeString`
-
-## 🚀 Quick Start
-
-### 📦 Installation
-
-```bash
-go get github.com/ubyte-source/go-jsonfast
-```
+- Zero-allocation Builder with `Acquire` / `Release` pool and `WarmPool` for pre-seeding.
+- Pre-computed `FieldKey` for static field names (typed string, literal-constructible).
+- `io.Writer` / `io.WriterTo` on both `Builder` and `BatchWriter` for pipeline interop.
+- NDJSON `BatchWriter` with pool, pre-seed, and write sinks.
+- SWAR-accelerated string escape and scanner (`SkipValueAt`, `SkipStringAt`, `SkipBracedAt`).
+- Direct-scan `FindField`, `IterateFields`, `IterateArray`, `IterateStringArray` (zero-alloc borrow).
+- `FlattenObject` / `AddFlattenedMapField` for dot-notation flattening.
+- RFC 3339 time formatting without `time.Format` allocations, UTC-normalised.
+- RFC 8259 compliance: invalid UTF-8 → U+FFFD; NaN / ±Inf → `null`.
+- `IsStructuralJSON` single-pass validator for untrusted payloads.
+- `testing.AllocsPerRun` CI gate: every hot path is asserted zero-alloc.
+- Native Go fuzzers for every scanner and validator.
+- Profile-guided optimisation: `default.pgo` tracked; `make pgo` regenerates.
 
 Requires **Go 1.25+**.
 
-### 💡 Basic Usage
+## Quick start
 
 ```go
 package main
@@ -90,18 +40,19 @@ import (
 
 func main() {
     b := jsonfast.Acquire()
+    defer jsonfast.Release(b)
+
     b.BeginObject()
     b.AddStringField("message", "hello world")
     b.AddIntField("severity", 3)
     b.AddTimeRFC3339Field("timestamp", time.Now())
     b.EndObject()
-    data := b.Bytes() // no allocation
-    fmt.Println(string(data))
-    jsonfast.Release(b) // return to pool
+
+    fmt.Println(string(b.Bytes()))
 }
 ```
 
-### 🔁 Reuse Without Allocation
+### Reuse without allocation
 
 ```go
 b := jsonfast.New(512)
@@ -118,241 +69,280 @@ b.EndObject()
 process(b.Bytes())
 ```
 
-### 📦 NDJSON Batching
+### NDJSON batching
 
 ```go
-bw := jsonfast.NewBatchWriter(4096)
+bw := jsonfast.AcquireBatchWriter()
+defer jsonfast.ReleaseBatchWriter(bw)
+
 b := jsonfast.Acquire()
+defer jsonfast.Release(b)
 
 for _, msg := range messages {
+    b.Reset()
     b.BeginObject()
     b.AddStringField("msg", msg)
     b.EndObject()
     bw.Append(b.Bytes())
-    b.Reset()
 }
 
-jsonfast.Release(b)
-payload := bw.Bytes() // {"msg":"..."}\n{"msg":"..."}\n...
-bw.Reset()
+// bw.Bytes() is the NDJSON payload; stream via io.WriterTo:
+if _, err := bw.WriteTo(conn); err != nil {
+    return err
+}
 ```
 
-### � Pre-computed Field Keys
+### Pre-computed field keys
 
-For static field names known at init time, use `FieldKey` to eliminate
-per-call quoting overhead (~7% faster):
+Static field names known at init time can be lifted to `FieldKey` to
+eliminate the per-call quoting. Construct via `NewFieldKey` or as a
+typed string literal:
 
 ```go
 var (
     keyMessage  = jsonfast.NewFieldKey("message")
     keySeverity = jsonfast.NewFieldKey("severity")
+
+    // Equivalent literal form (matching the documented layout):
+    keyVersion jsonfast.FieldKey = `,"version":`
 )
 
 b := jsonfast.Acquire()
 b.BeginObject()
 b.AddStringFieldKey(keyMessage, "hello world")
 b.AddIntFieldKey(keySeverity, 3)
+b.AddIntFieldKey(keyVersion, 1)
 b.EndObject()
 jsonfast.Release(b)
 ```
 
-### �🗺️ Map Flattening
+### Warm-up before the hot path
+
+Pre-seed the pools to smooth tail latency at start-up:
+
+```go
+jsonfast.WarmPool(128)
+jsonfast.WarmBatchWriterPool(32)
+```
+
+### Map flattening
 
 ```go
 nested := map[string]map[string]string{
     "sd@123": {"key1": "val1", "key2": "val2"},
 }
 flat := jsonfast.FlattenMap(nested, nil)
-// flat = {"sd@123.key1": "val1", "sd@123.key2": "val2"}
+// flat["sd@123.key1"] == "val1"
 ```
 
-## 📖 API Reference
+### Structural validation
 
-See the [package documentation](https://pkg.go.dev/github.com/ubyte-source/go-jsonfast) for the full API.
+```go
+if !jsonfast.IsStructuralJSON(payload) {
+    return fmt.Errorf("not a structurally valid JSON object/array")
+}
+```
+
+## API overview
+
+See the [package documentation](https://pkg.go.dev/github.com/ubyte-source/go-jsonfast) for the full godoc.
 
 ### Builder
 
 | Function | Description |
 |----------|-------------|
-| `New(capacity int) *Builder` | Create a new builder with initial capacity |
-| `Acquire() *Builder` | Get a builder from the pool |
-| `Release(*Builder)` | Return a builder to the pool |
-| `(*Builder).Reset()` | Clear for reuse without allocation |
-| `(*Builder).Bytes() []byte` | Get the underlying buffer |
-| `(*Builder).Len() int` | Current buffer length |
+| `New(capacity int) *Builder` | New builder with initial capacity (default 256). |
+| `Acquire() *Builder` | Take a builder from the pool. |
+| `Release(*Builder)` | Return a builder to the pool. |
+| `WarmPool(n int)` | Pre-seed the pool with n builders. |
+| `(*Builder).Reset()` | Clear for reuse; buffer retained. |
+| `(*Builder).Bytes() []byte` | Current payload (aliases internal buffer). |
+| `(*Builder).Len() int` | Current byte length. |
+| `(*Builder).Grow(n int)` | Ensure n spare bytes of capacity. |
+| `(*Builder).Write(p []byte) (int, error)` | `io.Writer`: append p unchanged. |
+| `(*Builder).WriteTo(w io.Writer) (int64, error)` | `io.WriterTo`: flush payload. |
 
-### Field Methods
+### Field methods (string-keyed)
+
+| Method | Output |
+|--------|--------|
+| `BeginObject()` / `EndObject()` | `{` / `}` |
+| `AddStringField(name, value)` | `"name":"value"` with escaping |
+| `AddIntField(name, v int)` | `"name":123` |
+| `AddInt64Field(name, v int64)` | `"name":123` |
+| `AddUint8Field` / `AddUint16Field` / `AddUint32Field` / `AddUint64Field` | `"name":n` |
+| `AddFloat64Field(name, v float64)` | `"name":3.14` — NaN/±Inf → `null` |
+| `AddBoolField(name, v bool)` | `"name":true` / `"name":false` |
+| `AddNullField(name)` | `"name":null` |
+| `AddTimeRFC3339Field(name, t time.Time)` | `"name":"YYYY-MM-DDThh:mm:ss[.fffffffff]Z"` |
+| `AddRawJSONField(name, rawJSON []byte)` | `"name":<raw>` — no escaping |
+| `AddRawJSONFieldString(name, rawJSON string)` | Same, string input |
+| `AddNestedStringMapField(name, m)` | `"name":{outer:{inner:"v",...},...}`, sorted |
+| `AddStringMapObject(m, rawJSONKey)` | writes a `map[string]string` as object |
+| `AddFlattenedMapField(m)` | flat `"outer.inner":"value"` fields, sorted |
+
+Field name requirement: safe ASCII (no escaping required). For untrusted names,
+escape via `EscapeString` or compose via `AppendEscapedString` + `AppendRawString`.
+
+### Pre-computed FieldKey methods
+
+| Function | Notes |
+|----------|-------|
+| `type FieldKey string` | Typed string holding `,"name":` |
+| `NewFieldKey(name string) FieldKey` | Factory; call at init time |
+| `AddStringFieldKey` / `AddIntFieldKey` / `AddInt64FieldKey` / `AddUint64FieldKey` | |
+| `AddBoolFieldKey` / `AddFloat64FieldKey` / `AddNullFieldKey` | |
+| `AddTimeRFC3339FieldKey` | |
+| `AddRawJSONFieldKey` / `AddRawJSONFieldKeyString` | |
+
+### Raw appenders
 
 | Method | Description |
 |--------|-------------|
-| `BeginObject()` | Start a JSON object `{` |
-| `EndObject()` | End a JSON object `}` |
-| `AddStringField(name, value string)` | Add `"name":"value"` with escaping |
-| `AddIntField(name string, v int)` | Add `"name":123` |
-| `AddUint8Field(name string, v uint8)` | Add `"name":255` |
-| `AddUint16Field(name string, v uint16)` | Add `"name":65535` |
-| `AddBoolField(name string, v bool)` | Add `"name":true/false` |
-| `AddNullField(name string)` | Add `"name":null` |
-| `AddTimeRFC3339Field(name string, t time.Time)` | Add `"name":"2024-01-15T12:30:45Z"` |
-| `AddRawJSONField(name string, rawJSON []byte)` | Add `"name":<raw>` (no escaping) |
-| `AddRawJSONFieldString(name, rawJSON string)` | Same, avoids `[]byte` allocation |
-| `AddNestedStringMapField(name string, m map[string]map[string]string)` | Add nested map as JSON object |
-| `AddStringMapObject(m map[string]string, rawJSONKey string)` | Write map as JSON object |
-| `AddFlattenedMapField(m map[string]map[string]string)` | Write flattened dot-notation fields |
+| `AppendRaw([]byte)` | Append raw bytes, no escaping or framing |
+| `AppendRawString(string)` | Append raw string, no escaping or framing |
+| `AppendEscapedString(string)` | Append with JSON escaping, zero-alloc |
+| `AddRawBytesField(name, value []byte)` | `"name":<value>` with name as raw bytes |
 
-### Pre-computed FieldKey Methods
+### Scanner
 
 | Function | Description |
 |----------|-------------|
-| `NewFieldKey(name string) FieldKey` | Create a pre-computed field key (call at init time) |
-| `AddStringFieldKey(k FieldKey, value string)` | Add `"name":"value"` using pre-computed key |
-| `AddIntFieldKey(k FieldKey, v int)` | Add `"name":123` using pre-computed key |
-| `AddInt64FieldKey(k FieldKey, v int64)` | Add `"name":123` using pre-computed key |
-| `AddUint64FieldKey(k FieldKey, v uint64)` | Add `"name":123` using pre-computed key |
-| `AddBoolFieldKey(k FieldKey, v bool)` | Add `"name":true/false` using pre-computed key |
-| `AddFloat64FieldKey(k FieldKey, v float64)` | Add `"name":3.14` using pre-computed key |
-| `AddTimeRFC3339FieldKey(k FieldKey, t time.Time)` | Add `"name":"..."` using pre-computed key |
-| `AddRawJSONFieldKey(k FieldKey, rawJSON []byte)` | Add `"name":<raw>` using pre-computed key |
-| `AddNullFieldKey(k FieldKey)` | Add `"name":null` using pre-computed key |
+| `IterateFields(data []byte, fn) bool` | Callback for each `"key":value` pair. |
+| `IterateFieldsString(s string, fn) bool` | Same, string input. |
+| `FindField(data []byte, key string) ([]byte, bool)` | Direct lookup without callback. |
+| `FindFieldString(s, key string) ([]byte, bool)` | Same, string input. |
+| `IterateArray(data []byte, fn) bool` | Callback for each element. |
+| `IterateArrayString(s string, fn) bool` | Same, string input. |
+| `IterateStringArray(data []byte, fn func(val string) bool) bool` | Zero-alloc borrow; see lifetime note. |
+| `IterateStringArrayString(s string, fn) bool` | Same, string input. |
+| `FlattenObject(b *Builder, data []byte) bool` | Recursive flatten into builder (≤ 64 levels). |
+| `SkipWS` / `SkipValueAt` / `SkipStringAt` / `SkipBracedAt` | Low-level SWAR scanners. |
+| `IsStructuralJSON(s string) bool` | Single-pass grammar validator with trailing-content rejection. |
+| `EscapeString(s string) string` | Returns s unchanged if already safe; allocates only when escape needed. |
 
-### Raw Append
-
-| Method | Description |
-|--------|-------------|
-| `AppendRaw([]byte)` | Append raw bytes (no escaping) |
-| `AppendRawString(string)` | Append raw string (no escaping) |
-| `AppendEscapedString(string)` | Append with JSON escaping (zero-alloc) |
-
-### Scanner (scan.go)
-
-| Function | Description |
-|----------|-------------|
-| `IterateFields(data []byte, fn func(key, value []byte) bool) bool` | Iterate top-level key-value pairs |
-| `IterateFieldsString(s string, fn func(key, value []byte) bool) bool` | Same, accepts string input |
-| `FindField(data []byte, key string) ([]byte, bool)` | Find a field value by key name |
-| `FlattenObject(b *Builder, data []byte) bool` | Recursively flatten nested JSON into Builder |
-| `SkipWS(data []byte, i int) int` | Skip whitespace |
-| `SkipValueAt(data []byte, i int) (int, bool)` | Skip a complete JSON value |
-| `SkipStringAt(data []byte, i int) (int, bool)` | Skip a JSON string (SWAR-accelerated) |
-| `SkipBracedAt(data []byte, i int, opener, closer byte) (int, bool)` | Skip balanced delimiters |
-
-### Utilities
-
-| Function | Description |
-|----------|-------------|
-| `EscapeString(string) string` | Escape JSON special characters (zero-alloc if no escaping needed) |
-| `IsLikelyJSON(string) bool` | SWAR-accelerated structural validation of JSON object/array |
-| `FlattenMap(m, dst map[string]string) map[string]string` | Flatten nested map to dot-notation |
+`IterateStringArray` passes a zero-allocation string view aliasing the input
+data. The view is only valid for the duration of the callback — clone via
+`strings.Clone` to retain.
 
 ### BatchWriter (NDJSON)
 
 | Function | Description |
 |----------|-------------|
-| `NewBatchWriter(capacity int) *BatchWriter` | Create a new batch writer |
-| `(*BatchWriter).Append([]byte)` | Add a JSON record + newline |
-| `(*BatchWriter).AppendString(string)` | Add a JSON record + newline (string) |
-| `(*BatchWriter).Bytes() []byte` | Get the NDJSON payload |
-| `(*BatchWriter).Len() int` | Current byte length |
-| `(*BatchWriter).Count() int` | Number of records |
-| `(*BatchWriter).Reset()` | Clear for reuse |
+| `NewBatchWriter(capacity int) *BatchWriter` | New writer with initial capacity (default 4096). |
+| `AcquireBatchWriter()` / `ReleaseBatchWriter(*BatchWriter)` | Pool API. |
+| `WarmBatchWriterPool(n int)` | Pre-seed the pool. |
+| `(*BatchWriter).Append([]byte)` / `.AppendString(string)` | Record + newline. |
+| `(*BatchWriter).Write(p []byte) (int, error)` | `io.Writer`: one record per call. |
+| `(*BatchWriter).WriteTo(w io.Writer) (int64, error)` | `io.WriterTo`: flush payload. |
+| `(*BatchWriter).Bytes()` / `.Len()` / `.Count()` / `.Reset()` / `.Grow(n)` | Buffer management. |
 
-## ⚡ Benchmarks
+### FlattenMap
+
+| Function | Description |
+|----------|-------------|
+| `FlattenMap(m, dst map[string]string) map[string]string` | Materialise a flat map; pass `dst` to avoid re-allocating. |
+
+## Benchmarks
+
+Measured on a 32-core x86-64 server, Go 1.25.9, with `default.pgo` enabled.
+
+```
+BenchmarkBuilder_FullSyslogObject-32             160 ns/op     0 B/op    0 allocs/op
+BenchmarkBuilder_FullSyslogObject_FieldKey-32    150 ns/op     0 B/op    0 allocs/op
+BenchmarkBuilder_EscapeString_PureASCII-32        34 ns/op     0 B/op    0 allocs/op
+BenchmarkBuilder_NestedStringMapField-32         378 ns/op     0 B/op    0 allocs/op
+BenchmarkBuilder_AcquireRelease-32                32 ns/op     0 B/op    0 allocs/op
+BenchmarkIterateFields-32                        140 ns/op     0 B/op    0 allocs/op
+BenchmarkFindField-32                            104 ns/op     0 B/op    0 allocs/op
+BenchmarkIterateArray_Strings100-32             1300 ns/op     0 B/op    0 allocs/op
+BenchmarkParallel_FindField-32                   7.4 ns/op  11 GB/s      0 allocs/op
+BenchmarkParallel_EscapeString_PureASCII-32      1.9 ns/op  60 GB/s      0 allocs/op
+```
 
 Run with:
-```bash
-make bench
-```
-
-Target: **0 allocs/op** on all builder benchmarks, **<170 ns/op** for a full syslog object.
-
-```
-BenchmarkBuilder_FullSyslogObject-32           34748235     171 ns/op     0 B/op    0 allocs/op
-BenchmarkBuilder_FullSyslogObject_FieldKey-32  37712958     161 ns/op     0 B/op    0 allocs/op
-BenchmarkBuilder_AddStringField-32             78449582      46 ns/op     0 B/op    0 allocs/op
-BenchmarkBuilder_EscapeString_PureASCII-32    100000000      33 ns/op     0 B/op    0 allocs/op
-BenchmarkBuilder_AcquireRelease-32            100000000      31 ns/op     0 B/op    0 allocs/op
-```
-
-## 🧪 Testing
 
 ```bash
-make test        # All tests with race detector
-make bench       # Benchmarks with memory profiling
-make fuzz        # Native Go fuzzing (30s)
-make cover       # Coverage report
-make lint        # golangci-lint (25 linters, ultra-strict)
+make bench        # sequential benchmarks
+make parallel     # RunParallel benchmarks across CPU counts
 ```
 
-## 🛡️ Security
+## Testing and gates
 
-The builder enforces bounds to prevent resource exhaustion:
+```bash
+make test       # all tests with race detector
+make alloc      # zero-allocation assertions (AllocsPerRun)
+make fuzz       # native Go fuzzing, 30s per target (override with FUZZTIME=10m)
+make cover      # HTML coverage report
+make lint       # staticcheck -checks=all + golangci-lint (0 issues, 0 nolint for complexity)
+make pgo        # regenerate default.pgo
+make ci         # vet + lint + test + alloc + cover + bench
+```
 
-| Parameter | Limit | Constant |
-|-----------|-------|----------|
-| Maximum pooled buffer size | 256 KiB | `1<<18` |
-| Maximum flatten depth | 64 levels | `maxFlattenDepth` |
+## Operational limits
 
-For security policy and vulnerability reporting, see [SECURITY.md](SECURITY.md).
+| Parameter | Value | Rationale |
+|-----------|-------|-----------|
+| Builder pool max retained capacity | 256 KiB | Bounds per-instance retention. |
+| BatchWriter pool max retained capacity | 4 MiB | Bounds per-instance retention for batch sinks. |
+| `FlattenObject` maximum depth | 64 | Defends against pathological nesting. |
+| `AddNestedStringMapField` stack buffer | 8 keys (both levels) | Zero-alloc path; larger maps get one heap buffer per oversized map. |
+| `AddFlattenedMapField` stack buffer | 16 total entries | Zero-alloc path; larger maps get one heap buffer. |
+| `EscapeString` stack buffer | 506 bytes after escape margin | Zero-alloc for the common case. |
 
-## 🧠 Design Principles
+## Design principles
 
-1. **Zero-alloc is a constraint, not a goal.** It guides every design decision — enforced by benchmarks.
-2. **Fixed schemas only.** Not a general-purpose JSON encoder — tailored for known field sets.
-3. **Deterministic output.** Sorted keys for caching and deduplication.
-4. **No dependencies.** Pure Go, no external libraries, no cgo.
-5. **The buffer is the API.** Everything writes directly into `[]byte` — no intermediate representations.
+1. Zero-alloc is a constraint, not a goal. Every hot path is gated by
+   `testing.AllocsPerRun`; a regression fails CI.
+2. Fixed schemas only. This is not a general-purpose JSON encoder.
+3. Deterministic output. Keys are sorted wherever the caller may dedupe
+   or cache the output.
+4. No dependencies. Pure Go, no cgo, no code generation.
+5. The buffer is the API. All writes land in `[]byte`; no intermediate
+   representations.
 
-## 📁 Project Structure
+## Project layout
 
 ```
 go-jsonfast/
-├── jsonfast.go         # Builder: zero-alloc JSON builder with pool, escaping, field methods
-├── scan.go             # JSON scanner: IterateFields, FindField, FlattenObject, Skip*
-├── swar.go             # SWAR constants and detect functions for word-at-a-time scanning
-├── flatten.go          # FlattenMap, AddFlattenedMapField: nested map flattening
-├── ndjson.go           # BatchWriter: NDJSON record batching
-├── doc.go              # Package documentation
-├── .golangci.yml       # Ultra-strict linter config (25 linters)
-├── Makefile            # Build, test, bench, fuzz, lint
-├── CONTRIBUTING.md     # Contribution guidelines
-├── SECURITY.md         # Security policy
-└── LICENSE             # MIT
+├── jsonfast.go        # Builder: pool, field methods, escape, time, integer formatting
+├── scan.go            # Scanner: Skip*, Iterate*, FindField, FlattenObject, IsStructuralJSON
+├── swar.go            # SWAR constants and byte-classification helpers
+├── flatten.go         # FlattenMap and AddFlattenedMapField
+├── ndjson.go          # BatchWriter: pool, append, io.Writer / io.WriterTo
+├── doc.go             # Package documentation
+├── alloc_test.go      # Zero-allocation CI gate (testing.AllocsPerRun)
+├── parallel_test.go   # RunParallel benchmarks for pool-contention profiling
+├── io_test.go         # io.Writer / io.WriterTo interface contract
+├── fuzz_test.go       # Native Go fuzzers for scanners and validators
+├── *_test.go          # Unit tests, example tests
+├── default.pgo        # Profile-guided optimisation profile
+├── .golangci.yml      # Strict linter configuration
+└── Makefile           # test, bench, fuzz, lint, cover, pgo, ci
 ```
 
-## 🤝 Contributing
+## Contributing
 
-Contributions are welcome. Please fork the repository, create a feature branch, and submit a pull request.
+See [CONTRIBUTING.md](CONTRIBUTING.md). For security issues, see
+[SECURITY.md](SECURITY.md).
 
-For contribution guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md).
+## Versioning
 
----
+We use [SemVer](https://semver.org/). Releases are tracked in the
+repository [tags](https://github.com/ubyte-source/go-jsonfast/tags).
 
-## 🔖 Versioning
+## Authors
 
-We use [SemVer](https://semver.org/) for versioning. For available versions, see the [tags on this repository](https://github.com/ubyte-source/go-jsonfast/tags).
+- **Paolo Fabris** — [ubyte.it](https://ubyte.it/)
 
----
+See also the list of [contributors](https://github.com/ubyte-source/go-jsonfast/contributors).
 
-## 👤 Authors
+## License
 
-- **Paolo Fabris** — _Initial work_ — [ubyte.it](https://ubyte.it/)
+MIT — see [LICENSE](LICENSE).
 
-See also the list of [contributors](https://github.com/ubyte-source/go-jsonfast/contributors) who participated in this project.
+## Support
 
-## 📄 License
-
-This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
-
----
-
-## ☕ Support This Project
-
-If go-jsonfast has been useful for your high-throughput pipelines, consider supporting its development:
+If go-jsonfast is useful for your pipelines, consider supporting the work:
 
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-Support-orange?style=for-the-badge&logo=buy-me-a-coffee)](https://coff.ee/ubyte)
-
----
-
-**Star this repository if you find it useful.**
-
-For questions, issues, or contributions, visit our [GitHub repository](https://github.com/ubyte-source/go-jsonfast).

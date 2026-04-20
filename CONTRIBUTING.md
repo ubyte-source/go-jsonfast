@@ -16,26 +16,27 @@ make all
 ## Running Tests
 
 ```bash
-make test        # All tests with race detector
-make bench       # Benchmarks with memory profiling
-make fuzz        # Native Go fuzzing (30s)
-make cover       # Coverage report
-make vet         # Static analysis
+make test        # all tests with race detector
+make alloc       # zero-allocation CI gate (AllocsPerRun)
+make bench       # benchmarks with memory profiling
+make parallel    # RunParallel benchmarks at cpu=1,4,8,16,32
+make fuzz        # native Go fuzzing (default 30s per target)
+make cover       # HTML coverage report
+make lint        # golangci-lint + staticcheck
+make ci          # vet + lint + test + alloc + cover + bench
 ```
 
 ## Zero-Allocation Constraint
 
-The hot path (`Builder` methods, `Acquire`/`Release`, `BatchWriter`) must produce
-**0 allocations per operation**. This is enforced by benchmarks with `-benchmem`.
-
-All benchmarks must use `b.Loop()` (Go 1.24+), not `for range b.N` or `for i := 0; i < b.N; i++`.
+Every documented hot path must produce **0 allocations per operation**.
+`make alloc` runs the `TestZeroAlloc_*` suite which gates CI via
+`testing.AllocsPerRun`. All benchmarks use `b.Loop()`.
 
 Before submitting a change, run:
-```bash
-go test -bench=. -benchmem ./...
-```
 
-Every builder benchmark line must show `0 B/op` and `0 allocs/op`.
+```bash
+make ci
+```
 
 ## Code Style
 
@@ -47,14 +48,7 @@ Every builder benchmark line must show `0 B/op` and `0 allocs/op`.
 
 ## Architecture
 
-```
-jsonfast.go     — Builder: zero-alloc JSON builder with pool, escaping, field methods
-scan.go         — JSON scanner: IterateFields, FindField, FlattenObject, Skip*
-swar.go         — SWAR constants and detect functions for word-at-a-time scanning
-flatten.go      — FlattenMap, AddFlattenedMapField: nested map flattening
-ndjson.go       — BatchWriter: NDJSON record batching
-doc.go          — Package documentation
-```
+See [README.md](README.md#project-layout) for the full file map.
 
 ## Design Principles
 
