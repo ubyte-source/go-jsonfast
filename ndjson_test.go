@@ -5,10 +5,6 @@ import (
 	"testing"
 )
 
-// ---------------------------------------------------------------------------
-// BatchWriter
-// ---------------------------------------------------------------------------
-
 func TestBatchWriter_Append(t *testing.T) {
 	bw := NewBatchWriter(256)
 	bw.Append([]byte(`{"key":"value"}`))
@@ -46,7 +42,7 @@ func TestBatchWriter_Len(t *testing.T) {
 		t.Errorf("expected Len()=0, got %d", bw.Len())
 	}
 	bw.Append([]byte("x"))
-	if bw.Len() != 2 { // "x" + "\n"
+	if bw.Len() != 2 {
 		t.Errorf("expected Len()=2, got %d", bw.Len())
 	}
 }
@@ -87,10 +83,6 @@ func TestBatchWriter_NegativeCapacity(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// AcquireBatchWriter / ReleaseBatchWriter
-// ---------------------------------------------------------------------------
-
 func TestAcquireReleaseBatchWriter(t *testing.T) {
 	bw := AcquireBatchWriter()
 	if bw == nil {
@@ -121,19 +113,13 @@ func TestAcquireBatchWriter_Reuse(t *testing.T) {
 	ReleaseBatchWriter(b2)
 }
 
-// ---------------------------------------------------------------------------
-// WarmBatchWriterPool — pre-seeds the BatchWriter pool before the hot path.
-// ---------------------------------------------------------------------------
-
 func TestWarmBatchWriterPool_NonPositive(_ *testing.T) {
-	// Non-positive sizes are a no-op and must not panic.
 	WarmBatchWriterPool(0)
 	WarmBatchWriterPool(-1)
 }
 
 func TestWarmBatchWriterPool_Primes(t *testing.T) {
 	WarmBatchWriterPool(8)
-	// Drain a handful of writers and verify each is fresh and usable.
 	for range 4 {
 		bw := AcquireBatchWriter()
 		if bw == nil {
@@ -145,10 +131,6 @@ func TestWarmBatchWriterPool_Primes(t *testing.T) {
 		ReleaseBatchWriter(bw)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Benchmarks
-// ---------------------------------------------------------------------------
 
 func BenchmarkBatchWriter_Append(b *testing.B) {
 	bw := NewBatchWriter(4096)

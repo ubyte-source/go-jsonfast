@@ -167,16 +167,16 @@ See the [package documentation](https://pkg.go.dev/github.com/ubyte-source/go-js
 | Method | Output |
 |--------|--------|
 | `BeginObject()` / `EndObject()` | `{` / `}` |
+| `BeginObjectField(name)` / `EndObjectField()` | `"name":{` / `}`, manages inner separator state |
 | `AddStringField(name, value)` | `"name":"value"` with escaping |
+| `AddStringArrayField(name, values)` | `"name":["v1","v2",...]` with escaping |
 | `AddIntField(name, v int)` | `"name":123` |
 | `AddInt64Field(name, v int64)` | `"name":123` |
-| `AddUint8Field` / `AddUint16Field` / `AddUint32Field` / `AddUint64Field` | `"name":n` |
 | `AddFloat64Field(name, v float64)` | `"name":3.14` — NaN/±Inf → `null` |
 | `AddBoolField(name, v bool)` | `"name":true` / `"name":false` |
 | `AddNullField(name)` | `"name":null` |
 | `AddTimeRFC3339Field(name, t time.Time)` | `"name":"YYYY-MM-DDThh:mm:ss[.fffffffff]Z"` |
 | `AddRawJSONField(name, rawJSON []byte)` | `"name":<raw>` — no escaping |
-| `AddRawJSONFieldString(name, rawJSON string)` | Same, string input |
 | `AddNestedStringMapField(name, m)` | `"name":{outer:{inner:"v",...},...}`, sorted |
 | `AddStringMapObject(m, rawJSONKey)` | writes a `map[string]string` as object |
 | `AddFlattenedMapField(m)` | flat `"outer.inner":"value"` fields, sorted |
@@ -192,8 +192,9 @@ escape via `EscapeString` or compose via `AppendEscapedString` + `AppendRawStrin
 | `NewFieldKey(name string) FieldKey` | Factory; call at init time |
 | `AddStringFieldKey` / `AddIntFieldKey` / `AddInt64FieldKey` / `AddUint64FieldKey` | |
 | `AddBoolFieldKey` / `AddFloat64FieldKey` / `AddNullFieldKey` | |
+| `AddStringArrayFieldKey` / `BeginObjectFieldKey` | |
 | `AddTimeRFC3339FieldKey` | |
-| `AddRawJSONFieldKey` / `AddRawJSONFieldKeyString` | |
+| `AddRawJSONFieldKey` | |
 
 ### Raw appenders
 

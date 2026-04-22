@@ -10,9 +10,6 @@ import (
 	"unicode/utf8"
 )
 
-// Non-finite IEEE-754 fixtures. Declared at package scope so the other
-// test files in this package (notably alloc_test.go) can share a single
-// canonical source for NaN and ±Inf.
 var (
 	nanValue    = math.NaN()
 	posInfValue = math.Inf(1)
@@ -148,9 +145,87 @@ func TestBuilder_AddStringField(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// AddRawJSONField
-// ---------------------------------------------------------------------------
+func TestBuilder_AddStringArrayField(t *testing.T) {
+	b := New(256)
+	b.BeginObject()
+	b.AddStringArrayField("ids", []string{"a", "b", `c"d`})
+	b.AddStringArrayField("empty", nil)
+	b.EndObject()
+	want := `{"ids":["a","b","c\"d"],"empty":[]}`
+	if got := string(b.Bytes()); got != want {
+		t.Fatalf("got %s, want %s", got, want)
+	}
+}
+
+func TestBuilder_AddStringArrayFieldKey(t *testing.T) {
+	k := NewFieldKey("names")
+	b := New(128)
+	b.BeginObject()
+	b.AddStringArrayFieldKey(k, []string{"alice", "bob"})
+	b.EndObject()
+	want := `{"names":["alice","bob"]}`
+	if got := string(b.Bytes()); got != want {
+		t.Fatalf("got %s, want %s", got, want)
+	}
+}
+
+func TestBuilder_BeginObjectField(t *testing.T) {
+	b := New(256)
+	b.BeginObject()
+	b.AddStringField("a", "1")
+	b.BeginObjectField("inner")
+	b.AddStringField("x", "y")
+	b.AddIntField("n", 42)
+	b.EndObjectField()
+	b.AddStringField("b", "2")
+	b.EndObject()
+	want := `{"a":"1","inner":{"x":"y","n":42},"b":"2"}`
+	if got := string(b.Bytes()); got != want {
+		t.Fatalf("got %s, want %s", got, want)
+	}
+}
+
+func TestBuilder_BeginObjectFieldKey(t *testing.T) {
+	k := NewFieldKey("meta")
+	b := New(128)
+	b.BeginObject()
+	b.BeginObjectFieldKey(k)
+	b.AddStringField("k", "v")
+	b.EndObjectField()
+	b.EndObject()
+	want := `{"meta":{"k":"v"}}`
+	if got := string(b.Bytes()); got != want {
+		t.Fatalf("got %s, want %s", got, want)
+	}
+}
+
+func TestBuilder_BeginObjectField_Empty(t *testing.T) {
+	b := New(128)
+	b.BeginObject()
+	b.BeginObjectField("empty")
+	b.EndObjectField()
+	b.AddStringField("after", "x")
+	b.EndObject()
+	want := `{"empty":{},"after":"x"}`
+	if got := string(b.Bytes()); got != want {
+		t.Fatalf("got %s, want %s", got, want)
+	}
+}
+
+func TestBuilder_BeginObjectField_Nested(t *testing.T) {
+	b := New(256)
+	b.BeginObject()
+	b.BeginObjectField("a")
+	b.BeginObjectField("b")
+	b.AddIntField("c", 1)
+	b.EndObjectField()
+	b.EndObjectField()
+	b.EndObject()
+	want := `{"a":{"b":{"c":1}}}`
+	if got := string(b.Bytes()); got != want {
+		t.Fatalf("got %s, want %s", got, want)
+	}
+}
 
 func TestBuilder_AddRawJSONField(t *testing.T) {
 	tests := []struct {
@@ -287,70 +362,6 @@ func TestBuilder_AddInt64Field_Negative(t *testing.T) {
 	assertContains(t, string(b.Bytes()), `"neg":-123456789`)
 }
 
-// ---------------------------------------------------------------------------
-// AddUint8Field / AddUint16Field / AddUint32Field / AddUint64Field
-// ---------------------------------------------------------------------------
-
-func TestBuilder_AddUint8Field(t *testing.T) {
-	b := New(256)
-	b.BeginObject()
-	b.AddUint8Field("severity", 5)
-	b.EndObject()
-	expect(t, `{"severity":5}`, string(b.Bytes()))
-}
-
-func TestBuilder_AddUint8Field_Zero(t *testing.T) {
-	b := New(256)
-	b.BeginObject()
-	b.AddUint8Field("sev", 0)
-	b.EndObject()
-	assertContains(t, string(b.Bytes()), `"sev":0`)
-}
-
-func TestBuilder_AddUint8Field_Max(t *testing.T) {
-	b := New(256)
-	b.BeginObject()
-	b.AddUint8Field("sev", 255)
-	b.EndObject()
-	assertContains(t, string(b.Bytes()), `"sev":255`)
-}
-
-func TestBuilder_AddUint16Field(t *testing.T) {
-	b := New(256)
-	b.BeginObject()
-	b.AddUint16Field("version", 1)
-	b.EndObject()
-	expect(t, `{"version":1}`, string(b.Bytes()))
-}
-
-func TestBuilder_AddUint16Field_Max(t *testing.T) {
-	b := New(256)
-	b.BeginObject()
-	b.AddUint16Field("ver", 65535)
-	b.EndObject()
-	assertContains(t, string(b.Bytes()), `"ver":65535`)
-}
-
-func TestBuilder_AddUint32Field(t *testing.T) {
-	b := New(256)
-	b.BeginObject()
-	b.AddUint32Field("pid", 4294967295)
-	b.EndObject()
-	assertContains(t, string(b.Bytes()), `"pid":4294967295`)
-}
-
-func TestBuilder_AddUint64Field(t *testing.T) {
-	b := New(256)
-	b.BeginObject()
-	b.AddUint64Field("id", uint64(math.MaxUint64))
-	b.EndObject()
-	assertContains(t, string(b.Bytes()), `"id":18446744073709551615`)
-}
-
-// ---------------------------------------------------------------------------
-// AddFloat64Field
-// ---------------------------------------------------------------------------
-
 func TestBuilder_AddFloat64Field(t *testing.T) {
 	tests := []struct {
 		name string
@@ -374,10 +385,6 @@ func TestBuilder_AddFloat64Field(t *testing.T) {
 		})
 	}
 }
-
-// Non-finite IEEE-754 values are emitted as null: JSON (RFC 8259) has no
-// syntax for NaN or ±Inf. The property holds for both the string-keyed
-// and FieldKey-keyed entry points.
 
 func TestBuilder_AddFloat64Field_NaN(t *testing.T) {
 	b := New(32)
@@ -444,8 +451,6 @@ func TestBuilder_AddTimeRFC3339Field_ZeroTime(t *testing.T) {
 	b.BeginObject()
 	b.AddTimeRFC3339Field("ts", time.Time{})
 	b.EndObject()
-	// time.Time{} is year 1, but our Unix-based approach clamps negative timestamps to epoch.
-	// The output must still be valid JSON with a valid RFC3339 timestamp.
 	result := string(b.Bytes())
 	assertContains(t, result, `"ts":"`)
 	var parsed map[string]string
@@ -459,7 +464,6 @@ func TestBuilder_AddTimeRFC3339Field_NegativeYear(t *testing.T) {
 	b.BeginObject()
 	b.AddTimeRFC3339Field("ts", time.Date(-5, 1, 1, 0, 0, 0, 0, time.UTC))
 	b.EndObject()
-	// Negative dates are clamped to epoch (1970-01-01).
 	result := string(b.Bytes())
 	assertContains(t, result, `"ts":"`)
 	var parsed map[string]string
@@ -501,6 +505,60 @@ func TestBuilder_AddTimeRFC3339Field_Modern(t *testing.T) {
 	b.AddTimeRFC3339Field("ts", ts)
 	b.EndObject()
 	assertContains(t, string(b.Bytes()), `"ts":"2025-07-04T18:45:30.5Z"`)
+}
+
+// ---------------------------------------------------------------------------
+// AddTimeRFC3339OffsetField
+// ---------------------------------------------------------------------------
+
+func TestBuilder_AddTimeRFC3339OffsetField_UTC(t *testing.T) {
+	ts := time.Date(2025, 7, 4, 18, 45, 30, 0, time.UTC)
+	b := New(128)
+	b.BeginObject()
+	b.AddTimeRFC3339OffsetField("ts", ts)
+	b.EndObject()
+	expect(t, `{"ts":"2025-07-04T18:45:30Z"}`, string(b.Bytes()))
+}
+
+func TestBuilder_AddTimeRFC3339OffsetField_PositiveOffset(t *testing.T) {
+	loc := time.FixedZone("CEST", 2*3600)
+	ts := time.Date(2025, 7, 4, 20, 45, 30, 0, loc)
+	b := New(128)
+	b.BeginObject()
+	b.AddTimeRFC3339OffsetField("ts", ts)
+	b.EndObject()
+	expect(t, `{"ts":"2025-07-04T20:45:30+02:00"}`, string(b.Bytes()))
+}
+
+func TestBuilder_AddTimeRFC3339OffsetField_NegativeOffset(t *testing.T) {
+	loc := time.FixedZone("EST", -5*3600)
+	ts := time.Date(2025, 7, 4, 13, 45, 30, 0, loc)
+	b := New(128)
+	b.BeginObject()
+	b.AddTimeRFC3339OffsetField("ts", ts)
+	b.EndObject()
+	expect(t, `{"ts":"2025-07-04T13:45:30-05:00"}`, string(b.Bytes()))
+}
+
+func TestBuilder_AddTimeRFC3339OffsetField_WithNanoseconds(t *testing.T) {
+	loc := time.FixedZone("IST", 5*3600+30*60)
+	ts := time.Date(2025, 7, 4, 18, 45, 30, 123456789, loc)
+	b := New(128)
+	b.BeginObject()
+	b.AddTimeRFC3339OffsetField("ts", ts)
+	b.EndObject()
+	expect(t, `{"ts":"2025-07-04T18:45:30.123456789+05:30"}`, string(b.Bytes()))
+}
+
+func TestBuilder_AddTimeRFC3339OffsetFieldKey(t *testing.T) {
+	k := NewFieldKey("ts")
+	loc := time.FixedZone("JST", 9*3600)
+	ts := time.Date(2025, 7, 4, 18, 45, 30, 0, loc)
+	b := New(128)
+	b.BeginObject()
+	b.AddTimeRFC3339OffsetFieldKey(k, ts)
+	b.EndObject()
+	expect(t, `{"ts":"2025-07-04T18:45:30+09:00"}`, string(b.Bytes()))
 }
 
 // ---------------------------------------------------------------------------
@@ -789,22 +847,15 @@ func TestValidContinuation(t *testing.T) {
 }
 
 func TestValidContinuation_OverlongRejection(t *testing.T) {
-	// validContinuation only checks continuation byte form (10xxxxxx).
-	// Overlong/range validation is done at the codepoint level in escapeMultiByte.
-	// Here we verify continuation byte checks still work correctly.
-
-	// Valid continuation bytes should pass.
 	if !validContinuation(string([]byte{0xE0, 0x80, 0x80}), 0, 3) {
 		t.Error("expected valid continuation bytes for E0 80 80")
 	}
-	// Invalid continuation byte should fail.
 	if validContinuation(string([]byte{0xE0, 0x00, 0x80}), 0, 3) {
 		t.Error("expected invalid for E0 00 80 (non-continuation)")
 	}
 }
 
 func TestEscapeString_OverlongUTF8(t *testing.T) {
-	// All overlong sequences should produce U+FFFD (0xEF 0xBF 0xBD)
 	tests := []struct {
 		name  string
 		input []byte
@@ -873,10 +924,8 @@ func TestExportedEscapeString_Mixed(t *testing.T) {
 }
 
 func TestExportedEscapeString_InvalidUTF8(t *testing.T) {
-	// EscapeString must handle invalid UTF-8, replacing with U+FFFD.
 	result := EscapeString("\xff\xfe")
 	assertContains(t, result, "\ufffd")
-	// Result wrapped in quotes must be valid JSON.
 	raw := `{"v":"` + result + `"}`
 	var parsed map[string]string
 	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
@@ -885,7 +934,6 @@ func TestExportedEscapeString_InvalidUTF8(t *testing.T) {
 }
 
 func TestExportedEscapeString_InvalidLeadingByte(t *testing.T) {
-	// Byte 0x80 is an invalid UTF-8 leading byte and must be replaced.
 	result := EscapeString(string([]byte{0x80}))
 	assertContains(t, result, "\ufffd")
 }
@@ -1169,10 +1217,6 @@ func TestBuilder_AddNestedStringMapField_LargeMap(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// appendNano — trailing zero trimming
-// ---------------------------------------------------------------------------
-
 func TestBuilder_AddTimeRFC3339Field_AllNanoDigits(t *testing.T) {
 	ts := time.Date(2024, 1, 1, 0, 0, 0, 100000000, time.UTC)
 	b := New(128)
@@ -1191,15 +1235,14 @@ func TestIsStructuralJSON(t *testing.T) {
 		input string
 		want  bool
 	}{
-		// Valid JSON structures.
 		{`{"key":"value"}`, true},
 		{`[1,2,3]`, true},
 		{`{}`, true},
 		{`[]`, true},
 		{`{"a":{"b":1}}`, true},
 		{`[{"x":1},{"y":2}]`, true},
+		{`[-1.5e10,0.001,42]`, true},
 
-		// Not JSON at all.
 		{`{`, false},
 		{`}`, false},
 		{``, false},
@@ -1208,11 +1251,20 @@ func TestIsStructuralJSON(t *testing.T) {
 		{`not json`, false},
 		{`123`, false},
 
-		// Structurally invalid — matching delimiters but bad content.
 		{`{not json}`, false},
 		{`{unclosed: "string}`, false},
 		{`{"key": "value"} trailing`, false},
 		{`[1,2,]`, false},
+
+		{`[00]`, false},
+		{`[01]`, false},
+		{`[1.]`, false},
+		{`[.5]`, false},
+		{`[1e]`, false},
+		{`[1e+]`, false},
+		{`[-]`, false},
+		{`[truex]`, false},
+		{`[nullx]`, false},
 	}
 	for _, tt := range tests {
 		if got := IsStructuralJSON(tt.input); got != tt.want {
@@ -1296,7 +1348,6 @@ func TestAddStringMapObject_RawKeyNotJSON(t *testing.T) {
 }
 
 func TestAddStringMapObject_LargeMap(t *testing.T) {
-	// >8 entries triggers the heap-allocated sort-buffer fallback path.
 	m := make(map[string]string, 12)
 	for i := range 12 {
 		m[fmt.Sprintf("k%02d", i)] = fmt.Sprintf("v%02d", i)
@@ -1311,6 +1362,51 @@ func TestAddStringMapObject_LargeMap(t *testing.T) {
 	if len(parsed) != 12 {
 		t.Errorf("expected 12 keys, got %d", len(parsed))
 	}
+}
+
+// ---------------------------------------------------------------------------
+// AddStringMapObjectField
+// ---------------------------------------------------------------------------
+
+func TestAddStringMapObjectField_EmbedsAsField(t *testing.T) {
+	b := New(256)
+	b.BeginObject()
+	b.AddStringField("before", "x")
+	b.AddStringMapObjectField("attrs", map[string]string{"a": "1", "b": "2"}, "")
+	b.AddStringField("after", "y")
+	b.EndObject()
+	expect(t, `{"before":"x","attrs":{"a":"1","b":"2"},"after":"y"}`, string(b.Bytes()))
+}
+
+func TestAddStringMapObjectField_Empty(t *testing.T) {
+	b := New(128)
+	b.BeginObject()
+	b.AddStringField("before", "x")
+	b.AddStringMapObjectField("attrs", map[string]string{}, "")
+	b.AddStringField("after", "y")
+	b.EndObject()
+	expect(t, `{"before":"x","attrs":{},"after":"y"}`, string(b.Bytes()))
+}
+
+func TestAddStringMapObjectField_AsFirstField(t *testing.T) {
+	b := New(128)
+	b.BeginObject()
+	b.AddStringMapObjectField("attrs", map[string]string{"k": "v"}, "")
+	b.EndObject()
+	expect(t, `{"attrs":{"k":"v"}}`, string(b.Bytes()))
+}
+
+func TestAddStringMapObjectField_RawJSONKey(t *testing.T) {
+	b := New(256)
+	b.BeginObject()
+	b.AddStringMapObjectField("data", map[string]string{
+		"payload": `{"nested":true}`,
+		"note":    "plain",
+	}, "payload")
+	b.EndObject()
+	got := string(b.Bytes())
+	assertContains(t, got, `"payload":{"nested":true}`)
+	assertContains(t, got, `"note":"plain"`)
 }
 
 // ---------------------------------------------------------------------------
@@ -1393,23 +1489,6 @@ func TestAcquire_PoolCapacity(t *testing.T) {
 	Release(b)
 }
 
-func TestAddRawJSONFieldString(t *testing.T) {
-	b := New(256)
-	b.BeginObject()
-	b.AddRawJSONFieldString("nested", `{"x":1}`)
-	b.EndObject()
-	expect(t, `{"nested":{"x":1}}`, string(b.Bytes()))
-}
-
-func TestAddRawJSONFieldString_Multiple(t *testing.T) {
-	b := New(256)
-	b.BeginObject()
-	b.AddRawJSONFieldString("a", `[1,2]`)
-	b.AddRawJSONFieldString("b", `true`)
-	b.EndObject()
-	expect(t, `{"a":[1,2],"b":true}`, string(b.Bytes()))
-}
-
 func FuzzEscapeString(f *testing.F) {
 	f.Add("")
 	f.Add("hello world")
@@ -1446,7 +1525,6 @@ func FuzzEscapeString(f *testing.F) {
 // ---------------------------------------------------------------------------
 
 func TestValidContinuation_Size2_Invalid(t *testing.T) {
-	// 0xC2 followed by a non-continuation byte.
 	s := string([]byte{0xC2, 0x00})
 	if validContinuation(s, 0, 2) {
 		t.Error("expected false for bad 2-byte continuation")
@@ -1454,12 +1532,10 @@ func TestValidContinuation_Size2_Invalid(t *testing.T) {
 }
 
 func TestValidContinuation_Size3_Invalid(t *testing.T) {
-	// Valid first continuation, invalid second.
 	s := string([]byte{0xE0, 0x80, 0x00})
 	if validContinuation(s, 0, 3) {
 		t.Error("expected false for bad 3-byte continuation")
 	}
-	// Invalid first continuation.
 	s = string([]byte{0xE0, 0x00, 0x80})
 	if validContinuation(s, 0, 3) {
 		t.Error("expected false for bad 3-byte first continuation")
@@ -1467,11 +1543,10 @@ func TestValidContinuation_Size3_Invalid(t *testing.T) {
 }
 
 func TestValidContinuation_Size4_Invalid(t *testing.T) {
-	// All permutations of bad continuation bytes.
 	cases := [][]byte{
-		{0xF0, 0x00, 0x80, 0x80}, // first bad
-		{0xF0, 0x80, 0x00, 0x80}, // second bad
-		{0xF0, 0x80, 0x80, 0x00}, // third bad
+		{0xF0, 0x00, 0x80, 0x80},
+		{0xF0, 0x80, 0x00, 0x80},
+		{0xF0, 0x80, 0x80, 0x00},
 	}
 	for i, c := range cases {
 		s := string(c)
@@ -1496,7 +1571,6 @@ func TestValidContinuation_InvalidSize(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestEscapeString_InvalidUTF8(t *testing.T) {
-	// Bare continuation byte should be replaced with U+FFFD.
 	s := string([]byte{0x80})
 	got := EscapeString(s)
 	if got != "\ufffd" {
@@ -1515,25 +1589,20 @@ func TestEscapeString_Truncated2Byte(t *testing.T) {
 func TestEscapeString_Truncated3Byte(t *testing.T) {
 	s := string([]byte{0xE0, 0xA0})
 	got := EscapeString(s)
-	// Each invalid byte replaced individually → 2 × U+FFFD.
-	want := "\ufffd\ufffd"
-	if got != want {
-		t.Errorf("got %q, want %q", got, want)
+	if got != "\ufffd\ufffd" {
+		t.Errorf("got %q, want %q", got, "\ufffd\ufffd")
 	}
 }
 
 func TestEscapeString_Truncated4Byte(t *testing.T) {
 	s := string([]byte{0xF0, 0x90, 0x80})
 	got := EscapeString(s)
-	// Each invalid byte replaced individually → 3 × U+FFFD.
-	want := "\ufffd\ufffd\ufffd"
-	if got != want {
-		t.Errorf("got %q, want %q", got, want)
+	if got != "\ufffd\ufffd\ufffd" {
+		t.Errorf("got %q, want %q", got, "\ufffd\ufffd\ufffd")
 	}
 }
 
 func TestEscapeString_LongNeedsEscape(t *testing.T) {
-	// Trigger the non-stackBuf path: >506 byte string with a special char.
 	s := string(make([]byte, 510)) + "\n"
 	got := EscapeString(s)
 	if len(got) < 510 {
@@ -1547,7 +1616,6 @@ func TestEscapeString_LongNeedsEscape(t *testing.T) {
 
 func TestCivilDate_NegativeTimestamp(t *testing.T) {
 	y, m, d := civilDate(-1)
-	// Negative clamped to 0 → 1970-01-01.
 	if y != 1970 || m != 1 || d != 1 {
 		t.Errorf("got %d-%d-%d, want 1970-1-1", y, m, d)
 	}
@@ -1561,7 +1629,6 @@ func TestCivilDate_Epoch(t *testing.T) {
 }
 
 func TestCivilDate_Y2K(t *testing.T) {
-	// 2000-01-01 00:00:00 UTC = 946684800
 	y, m, d := civilDate(946684800)
 	if y != 2000 || m != 1 || d != 1 {
 		t.Errorf("got %d-%d-%d, want 2000-1-1", y, m, d)
@@ -1569,7 +1636,6 @@ func TestCivilDate_Y2K(t *testing.T) {
 }
 
 func TestCivilDate_LeapYear(t *testing.T) {
-	// 2024-02-29 00:00:00 UTC = 1709164800
 	y, m, d := civilDate(1709164800)
 	if y != 2024 || m != 2 || d != 29 {
 		t.Errorf("got %d-%d-%d, want 2024-2-29", y, m, d)
@@ -1582,25 +1648,21 @@ func TestCivilDate_LeapYear(t *testing.T) {
 
 func TestRelease_LargeBuffer(_ *testing.T) {
 	b := Acquire()
-	// Grow buffer beyond 256 KB to ensure it is discarded by Release.
 	b.buf = make([]byte, 0, 1<<19)
 	Release(b)
-	// No assertion needed — only checking that Release does not panic.
 }
 
 // ---------------------------------------------------------------------------
-// WarmPool — pre-seeds the Builder pool before the hot path.
+// WarmPool
 // ---------------------------------------------------------------------------
 
 func TestWarmPool_NonPositive(_ *testing.T) {
-	// Non-positive sizes are a no-op and must not panic.
 	WarmPool(0)
 	WarmPool(-5)
 }
 
 func TestWarmPool_Primes(t *testing.T) {
 	WarmPool(16)
-	// Drain a handful of Builders and verify each is fresh and usable.
 	for range 8 {
 		b := Acquire()
 		if b == nil {
@@ -1614,7 +1676,7 @@ func TestWarmPool_Primes(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// FieldKey tests — covers NewFieldKey, precomputedKey, and all Add*FieldKey
+// FieldKey
 // ---------------------------------------------------------------------------
 
 func TestFieldKey_StringField(t *testing.T) {
@@ -1716,18 +1778,6 @@ func TestFieldKey_RawJSONFieldKey(t *testing.T) {
 	}
 }
 
-func TestFieldKey_RawJSONFieldKeyString(t *testing.T) {
-	k := NewFieldKey("raw")
-	b := New(128)
-	b.BeginObject()
-	b.AddRawJSONFieldKeyString(k, `{"nested":true}`)
-	b.EndObject()
-	want := `{"raw":{"nested":true}}`
-	if got := string(b.Bytes()); got != want {
-		t.Fatalf("got %s, want %s", got, want)
-	}
-}
-
 func TestFieldKey_Float64Field(t *testing.T) {
 	k := NewFieldKey("pi")
 	b := New(128)
@@ -1779,10 +1829,6 @@ func TestFieldKey_MixedWithRegularFields(t *testing.T) {
 	}
 }
 
-// FieldKey is an exported named string type, so values can also be
-// constructed from an untyped string literal matching the documented
-// `,"name":` layout. This test guards the literal form against accidental
-// internal representation changes.
 func TestFieldKey_ConstLiteral(t *testing.T) {
 	const k FieldKey = `,"hello":`
 	b := New(64)

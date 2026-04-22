@@ -5,8 +5,7 @@ import (
 	"time"
 )
 
-// Parallel benchmarks exercise the hot paths under goroutine
-// contention. Run with `make parallel` to profile scaling across cores.
+// Parallel benchmarks (run with `make parallel`).
 
 func BenchmarkParallel_Builder_AcquireRelease(b *testing.B) {
 	WarmPool(64)

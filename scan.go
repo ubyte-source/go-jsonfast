@@ -1,9 +1,11 @@
 package jsonfast
 
-import "unsafe"
+import (
+	"strconv"
+	"unsafe"
+)
 
-// wsTable marks ASCII whitespace (space, \n, \r, \t) as true. Using a
-// lookup table eliminates the multi-branch character classifier in SkipWS.
+// wsTable[b] is true for ASCII whitespace (' ', '\n', '\r', '\t').
 var wsTable = [256]bool{
 	' ':  true,
 	'\n': true,
@@ -12,7 +14,6 @@ var wsTable = [256]bool{
 }
 
 // SkipWS returns the index of the first non-whitespace byte at or after i.
-// Uses a 256-byte lookup table for branch-free classification.
 func SkipWS(data []byte, i int) int {
 	for i < len(data) && wsTable[data[i]] {
 		i++
@@ -20,8 +21,8 @@ func SkipWS(data []byte, i int) int {
 	return i
 }
 
-// SkipValueAt skips a complete JSON value starting at data[i]. Returns
-// the index past the value and true, or (i, false) on error.
+// SkipValueAt skips one JSON value starting at data[i] and returns the
+// index past it.
 func SkipValueAt(data []byte, i int) (int, bool) {
 	i = SkipWS(data, i)
 	if i >= len(data) {
@@ -38,22 +39,98 @@ func SkipValueAt(data []byte, i int) (int, bool) {
 	return skipScalar(data, i)
 }
 
-// skipScalar scans a bare JSON scalar (number/bool/null). It stops at
-// the first separator (',', '}', ']', whitespace) and returns the
-// boundary position. Content is not validated beyond framing.
+// skipScalar scans a JSON number or one of true/false/null.
 func skipScalar(data []byte, i int) (int, bool) {
-	for j := i; j < len(data); j++ {
-		switch data[j] {
-		case ',', '}', ']', ' ', '\n', '\r', '\t':
-			return j, j > i
-		}
+	if i >= len(data) {
+		return i, false
 	}
-	return len(data), len(data) > i
+	switch data[i] {
+	case 't':
+		return matchLiteral(data, i, "true")
+	case 'f':
+		return matchLiteral(data, i, "false")
+	case 'n':
+		return matchLiteral(data, i, "null")
+	}
+	return skipNumber(data, i)
 }
 
-// SkipStringAt finds the end of a JSON string starting at data[i].
-// data[i] must be '"'. Returns the index past the closing quote. Rejects
-// raw control chars (< 0x20) per RFC 8259.
+func matchLiteral(data []byte, i int, want string) (int, bool) {
+	if i+len(want) > len(data) || string(data[i:i+len(want)]) != want {
+		return i, false
+	}
+	return i + len(want), true
+}
+
+// skipNumber validates an RFC 8259 number:
+//
+//	[ "-" ] ( "0" | "1"-"9" *DIGIT ) [ "." 1*DIGIT ] [ ("e"|"E") ["+"|"-"] 1*DIGIT ]
+func skipNumber(data []byte, i int) (int, bool) {
+	start := i
+	if i < len(data) && data[i] == '-' {
+		i++
+	}
+	j, ok := skipNumberInt(data, i)
+	if !ok {
+		return start, false
+	}
+	if j, ok = skipNumberFrac(data, j); !ok {
+		return start, false
+	}
+	if j, ok = skipNumberExp(data, j); !ok {
+		return start, false
+	}
+	return j, true
+}
+
+func skipNumberInt(data []byte, i int) (int, bool) {
+	if i >= len(data) {
+		return i, false
+	}
+	if data[i] == '0' {
+		return i + 1, true
+	}
+	if data[i] < '1' || data[i] > '9' {
+		return i, false
+	}
+	return skipDigits(data, i+1), true
+}
+
+func skipNumberFrac(data []byte, i int) (int, bool) {
+	if i >= len(data) || data[i] != '.' {
+		return i, true
+	}
+	j := i + 1
+	if j >= len(data) || data[j] < '0' || data[j] > '9' {
+		return i, false
+	}
+	return skipDigits(data, j+1), true
+}
+
+func skipNumberExp(data []byte, i int) (int, bool) {
+	if i >= len(data) || (data[i] != 'e' && data[i] != 'E') {
+		return i, true
+	}
+	j := i + 1
+	if j < len(data) && (data[j] == '+' || data[j] == '-') {
+		j++
+	}
+	if j >= len(data) || data[j] < '0' || data[j] > '9' {
+		return i, false
+	}
+	return skipDigits(data, j+1), true
+}
+
+func skipDigits(data []byte, i int) int {
+	for i < len(data) && data[i] >= '0' && data[i] <= '9' {
+		i++
+	}
+	return i
+}
+
+// SkipStringAt skips a JSON string starting at data[i] (which must be
+// '"') and returns the index past the closing quote. Raw control bytes
+// (< 0x20) are rejected.
 func SkipStringAt(data []byte, i int) (int, bool) {
 	if i >= len(data) || data[i] != '"' {
 		return i, false
@@ -63,9 +140,6 @@ func SkipStringAt(data []byte, i int) (int, bool) {
 	return scanStringTail(data, j, n)
 }
 
-// swarSkipStringBulk advances j past 8-byte words that contain no '"',
-// '\\', or control byte, stopping at the first word that does.
-//
 //nolint:gosec // unsafe pointer math is load-bearing for SWAR throughput
 func swarSkipStringBulk(data []byte, j, n int) int {
 	if n-j < 8 {
@@ -82,8 +156,6 @@ func swarSkipStringBulk(data []byte, j, n int) int {
 	return j
 }
 
-// scanStringTail walks the remainder of a JSON string byte-by-byte,
-// handling escape sequences and rejecting raw control chars.
 func scanStringTail(data []byte, j, n int) (int, bool) {
 	for j < n {
 		c := data[j]
@@ -104,9 +176,7 @@ func scanStringTail(data []byte, j, n int) (int, bool) {
 	return j, false
 }
 
-// SkipBracedAt skips a balanced delimiter pair starting at data[i].
-// Delegates string scanning to SkipStringAt for SWAR throughput. For
-// non-string, non-bracket content, uses SWAR to skip 8 bytes at a time.
+// SkipBracedAt skips a balanced opener/closer pair starting at data[i].
 func SkipBracedAt(data []byte, i int, opener, closer byte) (int, bool) {
 	if i >= len(data) || data[i] != opener {
 		return i, false
@@ -114,8 +184,7 @@ func SkipBracedAt(data []byte, i int, opener, closer byte) (int, bool) {
 	depth := 1
 	i++
 	n := len(data)
-	swarOpener := swarLo * uint64(opener)
-	swarCloser := swarLo * uint64(closer)
+	swarOpener, swarCloser := swarBroadcastPair(opener, closer)
 
 	for i < n {
 		i = swarSkipBracedBulk(data, i, n, swarOpener, swarCloser)
@@ -134,8 +203,18 @@ func SkipBracedAt(data []byte, i int, opener, closer byte) (int, bool) {
 	return i, false
 }
 
-// stepBraced advances one byte within SkipBracedAt. done indicates the
-// matching closer was reached; ok is false on a parse error.
+// swarBroadcastPair returns the SWAR broadcast words for opener and
+// closer. The '{}/[]' pairs short-circuit to precomputed constants.
+func swarBroadcastPair(opener, closer byte) (openMask, closeMask uint64) {
+	switch opener {
+	case '{':
+		return swarBraceOpen, swarBraceClose
+	case '[':
+		return swarBrackOpen, swarBrackClose
+	}
+	return swarLo * uint64(opener), swarLo * uint64(closer)
+}
+
 func stepBraced(data []byte, i int, opener, closer byte, depth *int) (next int, done, ok bool) {
 	switch data[i] {
 	case '"':
@@ -158,9 +237,6 @@ func stepBraced(data []byte, i int, opener, closer byte, depth *int) (next int, 
 	}
 }
 
-// swarSkipBracedBulk advances i past 8-byte words that contain none of
-// '"', '\\', opener, closer, stopping at the first word that does.
-//
 //nolint:gosec // unsafe pointer math is load-bearing for SWAR throughput
 func swarSkipBracedBulk(data []byte, i, n int, swarOpener, swarCloser uint64) int {
 	if n-i < 8 {
@@ -185,10 +261,8 @@ func swarSkipBracedBulk(data []byte, i, n int, swarOpener, swarCloser uint64) in
 	return i
 }
 
-// iterateRawFields scans a JSON object and invokes fn for each field.
-// Returns the index past the closing '}' and whether the scan completed.
-// fn returning false aborts the scan; the aborted position is reported
-// with ok=false.
+// iterateRawFields walks a JSON object, invoking fn for each field.
+// Returns the index past '}' and whether the scan completed.
 func iterateRawFields(data []byte, fn func(d []byte, ks, ke, vs, ve int) bool) (end int, ok bool) {
 	i := SkipWS(data, 0)
 	if i >= len(data) || data[i] != '{' {
@@ -224,16 +298,12 @@ func iterateRawFields(data []byte, fn func(d []byte, ks, ke, vs, ve int) bool) (
 }
 
 // fieldPos holds the start/end offsets of a parsed "key":value pair.
-// Positions are relative to the original data slice; ke sits just past
-// the closing quote of the key and ve sits just past the final byte of
-// the value (which is also the cursor position for the next field).
 type fieldPos struct {
 	ks, ke, vs, ve int
 }
 
-// parseField reads one "key":value pair starting at i. On success,
-// returns the pair positions and ok=true. On failure, returns
-// (_, i-position-of-error, false).
+// parseField reads one "key":value pair. On failure, next is the
+// position where parsing stopped.
 func parseField(data []byte, i int) (fieldPos, int, bool) {
 	if data[i] != '"' {
 		return fieldPos{}, i, false
@@ -260,9 +330,7 @@ func parseField(data []byte, i int) (fieldPos, int, bool) {
 	return fieldPos{ks, ke, vs, ve}, ve, true
 }
 
-// stepAfterField consumes whitespace and the separator following a
-// field value. done is true when the enclosing object's '}' is reached;
-// ok is false on malformed input.
+// stepAfterField consumes whitespace and the ',' or '}' after a value.
 func stepAfterField(data []byte, i int) (next int, done, ok bool) {
 	i = SkipWS(data, i)
 	if i >= len(data) {
@@ -278,9 +346,8 @@ func stepAfterField(data []byte, i int) (next int, done, ok bool) {
 	}
 }
 
-// IterateFields calls fn for each top-level key-value pair in a JSON
-// object. key includes the surrounding quotes; value is the raw JSON
-// bytes. Returns false if the JSON is malformed or fn returns false.
+// IterateFields calls fn for each top-level field. key includes the
+// surrounding quotes; value is the raw JSON bytes.
 func IterateFields(data []byte, fn func(key, value []byte) bool) bool {
 	_, ok := iterateRawFields(data, func(d []byte, ks, ke, vs, ve int) bool {
 		return fn(d[ks:ke], d[vs:ve])
@@ -288,11 +355,10 @@ func IterateFields(data []byte, fn func(key, value []byte) bool) bool {
 	return ok
 }
 
-// IterateFieldsString is IterateFields over a string, avoiding the
-// []byte conversion. The slices passed to fn alias the string's backing
-// memory and must not be mutated.
+// IterateFieldsString is IterateFields with a string input. The slices
+// passed to fn alias s and must not be mutated.
 //
-//nolint:gosec // unsafe usage intentional: zero-alloc string→[]byte view
+//nolint:gosec // unsafe: zero-alloc string→[]byte view
 func IterateFieldsString(s string, fn func(key, value []byte) bool) bool {
 	if s == "" {
 		return false
@@ -301,10 +367,9 @@ func IterateFieldsString(s string, fn func(key, value []byte) bool) bool {
 	return IterateFields(data, fn)
 }
 
-// FindField looks up a top-level field by key in a JSON object. Returns
-// the raw value bytes and true on match, or (nil, false) if not found
-// or the JSON is malformed. Implemented as a direct scanner without a
-// callback so the match-comparison and early-return are inlined.
+// FindField returns the raw value bytes for the first top-level field
+// matching key, or (nil, false) if not found. Keys with JSON escape
+// sequences are decoded on the fly.
 func FindField(data []byte, key string) ([]byte, bool) {
 	i := SkipWS(data, 0)
 	if i >= len(data) || data[i] != '{' {
@@ -331,23 +396,200 @@ func FindField(data []byte, key string) ([]byte, bool) {
 	}
 }
 
-// atObjectEnd reports whether the cursor is past the end of data or
-// sitting on a closing '}'.
 func atObjectEnd(data []byte, i int) bool {
 	return i >= len(data) || data[i] == '}'
 }
 
-// matchesKey reports whether the quoted key at fp.ks..fp.ke equals key.
-// The unquoted key is data[fp.ks+1 : fp.ke-1].
 func matchesKey(data []byte, fp fieldPos, key string) bool {
-	return fp.ke-2-fp.ks == len(key) && string(data[fp.ks+1:fp.ke-1]) == key
+	raw := data[fp.ks+1 : fp.ke-1]
+	// Decoded length is at most raw length, so raw shorter than key
+	// cannot match without running the decode-aware comparator.
+	if len(raw) < len(key) {
+		return false
+	}
+	if !bytesContainBackslash(raw) {
+		return len(raw) == len(key) && string(raw) == key
+	}
+	return decodeKeyEqual(raw, key)
 }
 
-// FindFieldString is FindField over a string input, avoiding the
-// []byte conversion allocation. The returned slice aliases the string's
-// backing memory and must not be mutated.
+func bytesContainBackslash(raw []byte) bool {
+	for _, c := range raw {
+		if c == '\\' {
+			return true
+		}
+	}
+	return false
+}
+
+// decodeKeyEqual walks enc while decoding escapes, comparing each
+// decoded byte against key in lockstep.
+func decodeKeyEqual(enc []byte, key string) bool {
+	i, j := 0, 0
+	for i < len(enc) && j < len(key) {
+		if enc[i] != '\\' {
+			if enc[i] != key[j] {
+				return false
+			}
+			i++
+			j++
+			continue
+		}
+		ni, nj, ok := matchEscape(enc, i, key, j)
+		if !ok {
+			return false
+		}
+		i, j = ni, nj
+	}
+	return i == len(enc) && j == len(key)
+}
+
+// shortEscapeByte maps a JSON escape letter to its decoded byte (0 = unmapped).
+var shortEscapeByte = [256]byte{
+	'"':  '"',
+	'\\': '\\',
+	'/':  '/',
+	'b':  '\b',
+	'f':  '\f',
+	'n':  '\n',
+	'r':  '\r',
+	't':  '\t',
+}
+
+func matchEscape(enc []byte, i int, key string, j int) (nextI, nextJ int, ok bool) {
+	if i+1 >= len(enc) {
+		return 0, 0, false
+	}
+	esc := enc[i+1]
+	if esc == 'u' {
+		r, consumed, ok := decodeUnicodeEscape(enc, i)
+		if !ok {
+			return 0, 0, false
+		}
+		n, ok := compareCodepoint(r, key, j)
+		if !ok {
+			return 0, 0, false
+		}
+		return i + consumed, j + n, true
+	}
+	decoded := shortEscapeByte[esc]
+	if decoded == 0 {
+		return 0, 0, false
+	}
+	if key[j] != decoded {
+		return 0, 0, false
+	}
+	return i + 2, j + 1, true
+}
+
+// decodeUnicodeEscape parses \uXXXX (and a following low surrogate
+// when the first hit the high-surrogate range).
+func decodeUnicodeEscape(enc []byte, i int) (r rune, consumed int, ok bool) {
+	if i+6 > len(enc) {
+		return 0, 0, false
+	}
+	r, ok = parseHex4(enc[i+2 : i+6])
+	if !ok {
+		return 0, 0, false
+	}
+	if r >= 0xD800 && r <= 0xDBFF {
+		return decodeSurrogatePair(enc, i, r)
+	}
+	if r >= 0xDC00 && r <= 0xDFFF {
+		return 0, 0, false
+	}
+	return r, 6, true
+}
+
+func decodeSurrogatePair(enc []byte, i int, high rune) (r rune, consumed int, ok bool) {
+	if i+12 > len(enc) || enc[i+6] != '\\' || enc[i+7] != 'u' {
+		return 0, 0, false
+	}
+	low, ok := parseHex4(enc[i+8 : i+12])
+	if !ok || low < 0xDC00 || low > 0xDFFF {
+		return 0, 0, false
+	}
+	return 0x10000 + (high-0xD800)<<10 + (low - 0xDC00), 12, true
+}
+
+func parseHex4(b []byte) (rune, bool) {
+	var r rune
+	for _, c := range b {
+		r <<= 4
+		switch {
+		case c >= '0' && c <= '9':
+			r |= rune(c - '0')
+		case c >= 'a' && c <= 'f':
+			r |= rune(c-'a') + 10
+		case c >= 'A' && c <= 'F':
+			r |= rune(c-'A') + 10
+		default:
+			return 0, false
+		}
+	}
+	return r, true
+}
+
+// compareCodepoint checks whether key[j:] begins with the UTF-8
+// encoding of r and returns the number of key bytes consumed.
+func compareCodepoint(r rune, key string, j int) (int, bool) {
+	switch {
+	case r < 0x80:
+		return compareCodepoint1(r, key, j)
+	case r < 0x800:
+		return compareCodepoint2(r, key, j)
+	case r < 0x10000:
+		return compareCodepoint3(r, key, j)
+	default:
+		return compareCodepoint4(r, key, j)
+	}
+}
+
+// utf8Byte returns byte(r & 0xFF); the mask makes the conversion
+// provably safe for gosec.
+func utf8Byte(r rune) byte { return byte(r & 0xFF) }
+
+func compareCodepoint1(r rune, key string, j int) (int, bool) {
+	if j >= len(key) || key[j] != utf8Byte(r) {
+		return 0, false
+	}
+	return 1, true
+}
+
+func compareCodepoint2(r rune, key string, j int) (int, bool) {
+	if j+2 > len(key) ||
+		key[j] != utf8Byte(0xC0|r>>6) ||
+		key[j+1] != utf8Byte(0x80|r&0x3F) {
+		return 0, false
+	}
+	return 2, true
+}
+
+func compareCodepoint3(r rune, key string, j int) (int, bool) {
+	if j+3 > len(key) ||
+		key[j] != utf8Byte(0xE0|r>>12) ||
+		key[j+1] != utf8Byte(0x80|(r>>6)&0x3F) ||
+		key[j+2] != utf8Byte(0x80|r&0x3F) {
+		return 0, false
+	}
+	return 3, true
+}
+
+func compareCodepoint4(r rune, key string, j int) (int, bool) {
+	if j+4 > len(key) ||
+		key[j] != utf8Byte(0xF0|r>>18) ||
+		key[j+1] != utf8Byte(0x80|(r>>12)&0x3F) ||
+		key[j+2] != utf8Byte(0x80|(r>>6)&0x3F) ||
+		key[j+3] != utf8Byte(0x80|r&0x3F) {
+		return 0, false
+	}
+	return 4, true
+}
+
+// FindFieldString is FindField with a string input. The returned slice
+// aliases s and must not be mutated.
 //
-//nolint:gosec // unsafe usage intentional: zero-alloc string→[]byte view
+//nolint:gosec // unsafe: zero-alloc string→[]byte view
 func FindFieldString(s, key string) ([]byte, bool) {
 	if s == "" {
 		return nil, false
@@ -356,15 +598,11 @@ func FindFieldString(s, key string) ([]byte, bool) {
 	return FindField(data, key)
 }
 
-// maxFlattenDepth bounds recursion in FlattenObject to defend against
-// pathological input.
+// maxFlattenDepth bounds FlattenObject recursion.
 const maxFlattenDepth = 64
 
-// FlattenObject recursively flattens a nested JSON object into the
-// Builder's current object. Nested objects are recursed up to 64 levels
-// deep; leaf values are emitted as top-level fields. Non-object input
-// is silently skipped. Returns false if the JSON is malformed or the
-// nesting exceeds the depth limit.
+// FlattenObject recursively flattens a JSON object's leaves into b (up
+// to 64 levels deep). Non-object input is skipped silently.
 func FlattenObject(b *Builder, data []byte) bool {
 	return flattenObject(b, data, 0)
 }
@@ -375,7 +613,7 @@ func flattenObject(b *Builder, data []byte, depth int) bool {
 	}
 	i := SkipWS(data, 0)
 	if i >= len(data) || data[i] != '{' {
-		return true // non-object: skip silently
+		return true
 	}
 	callbackOK := true
 	_, parseOK := iterateRawFields(data, func(d []byte, ks, ke, vs, ve int) bool {
@@ -393,8 +631,7 @@ func flattenObject(b *Builder, data []byte, depth int) bool {
 	return parseOK && callbackOK
 }
 
-// iterateRawArray scans a JSON array and invokes fn for each element.
-// Returns the index past the closing ']' and whether the scan completed.
+// iterateRawArray walks a JSON array, invoking fn for each element.
 func iterateRawArray(data []byte, fn func(element []byte) bool) (end int, ok bool) {
 	i, empty, oopen := openArray(data)
 	if !oopen {
@@ -424,9 +661,8 @@ func iterateRawArray(data []byte, fn func(element []byte) bool) (end int, ok boo
 	}
 }
 
-// openArray consumes the opening '[' and any leading whitespace. It
-// reports empty=true if the array closes immediately (next is the index
-// past ']'); otherwise next points at the first element byte.
+// openArray consumes '[' and whitespace. empty=true if the array is []
+// (next points past ']'); otherwise next is the first element's byte.
 func openArray(data []byte) (next int, empty, ok bool) {
 	i := SkipWS(data, 0)
 	if i >= len(data) || data[i] != '[' {
@@ -442,9 +678,6 @@ func openArray(data []byte) (next int, empty, ok bool) {
 	return i, false, true
 }
 
-// stepAfterArrayElement consumes whitespace and the separator following
-// an array element. done is true when the enclosing ']' is reached; ok
-// is false on malformed input.
 func stepAfterArrayElement(data []byte, i int) (next int, done, ok bool) {
 	i = SkipWS(data, i)
 	if i >= len(data) {
@@ -460,23 +693,18 @@ func stepAfterArrayElement(data []byte, i int) (next int, done, ok bool) {
 	}
 }
 
-// IterateArray calls fn for each element in a JSON array. element is
-// the raw JSON bytes of each value (string with quotes, number, bool,
-// null, nested object, nested array). Returns false if the JSON is
-// malformed or fn returns false.
+// IterateArray calls fn for each element. element is the raw JSON
+// bytes of the value.
 func IterateArray(data []byte, fn func(element []byte) bool) bool {
 	_, ok := iterateRawArray(data, fn)
 	return ok
 }
 
-// IterateStringArray calls fn for each string element in a JSON array.
-// val is a zero-allocation view aliasing the input; it is only valid
-// for the duration of the callback. Use strings.Clone(val) in fn to
-// retain the value beyond the call.
+// IterateStringArray calls fn for each string element. val aliases the
+// input and is only valid for the duration of the callback; use
+// strings.Clone to retain. Non-string elements abort the iteration.
 //
-// Non-string elements cause the iteration to abort and return false.
-//
-//nolint:gosec // unsafe.String intentional: zero-alloc borrow into data
+//nolint:gosec // unsafe.String: zero-alloc borrow into data
 func IterateStringArray(data []byte, fn func(val string) bool) bool {
 	return IterateArray(data, func(elem []byte) bool {
 		if len(elem) < 2 || elem[0] != '"' || elem[len(elem)-1] != '"' {
@@ -489,11 +717,9 @@ func IterateStringArray(data []byte, fn func(val string) bool) bool {
 	})
 }
 
-// IterateArrayString is IterateArray over a string, avoiding the
-// []byte conversion. The slice passed to fn aliases the string's
-// backing memory and must not be mutated.
+// IterateArrayString is IterateArray with a string input.
 //
-//nolint:gosec // unsafe usage intentional: zero-alloc string→[]byte view
+//nolint:gosec // unsafe: zero-alloc string→[]byte view
 func IterateArrayString(s string, fn func(element []byte) bool) bool {
 	if s == "" {
 		return false
@@ -502,10 +728,9 @@ func IterateArrayString(s string, fn func(element []byte) bool) bool {
 	return IterateArray(data, fn)
 }
 
-// IterateStringArrayString is IterateStringArray over a string input.
-// See IterateStringArray for val lifetime rules.
+// IterateStringArrayString is IterateStringArray with a string input.
 //
-//nolint:gosec // unsafe usage intentional: zero-alloc string→[]byte view
+//nolint:gosec // unsafe: zero-alloc string→[]byte view
 func IterateStringArrayString(s string, fn func(val string) bool) bool {
 	if s == "" {
 		return false
@@ -514,35 +739,288 @@ func IterateStringArrayString(s string, fn func(val string) bool) bool {
 	return IterateStringArray(data, fn)
 }
 
-// IsStructuralJSON reports whether s is a structurally valid JSON object
-// or array with no trailing content. Grammar is validated in a single
-// pass: objects require well-formed key:value pairs with commas; arrays
-// require well-formed values with commas. Zero allocation.
+// IsStructuralJSON reports whether s is a grammar-valid JSON object or
+// array (every nested value checked) with no trailing content. Duplicate
+// keys are not rejected; invalid UTF-8 bytes are passed through.
 //
-// Does NOT validate semantic correctness (e.g., duplicate keys, number
-// formats, escape sequences beyond framing).
-//
-//nolint:gosec // unsafe.Slice: zero-alloc string→[]byte view; s is read-only
+//nolint:gosec // unsafe: zero-alloc string→[]byte view
 func IsStructuralJSON(s string) bool {
 	if len(s) < 2 || (s[0] != '{' && s[0] != '[') {
 		return false
 	}
 	data := unsafe.Slice(unsafe.StringData(s), len(s))
-	var end int
-	var ok bool
-	if data[0] == '{' {
-		end, ok = iterateRawFields(data, nopFieldCallback)
-	} else {
-		end, ok = iterateRawArray(data, nopArrayCallback)
-	}
-	return ok && end == len(data)
+	end, ok := validateValue(data, 0)
+	return ok && SkipWS(data, end) == len(data)
 }
 
-// nopFieldCallback / nopArrayCallback are package-level no-op callbacks
-// used by IsStructuralJSON. Declaring them at package scope prevents
-// per-call closure construction and keeps IsStructuralJSON allocation-free
-// even when its inputs are heap-backed.
-var (
-	nopFieldCallback = func(_ []byte, _, _, _, _ int) bool { return true }
-	nopArrayCallback = func(_ []byte) bool { return true }
-)
+// validateValue validates one JSON value (recursing into nested
+// containers) and returns the index past it.
+func validateValue(data []byte, i int) (int, bool) {
+	i = SkipWS(data, i)
+	if i >= len(data) {
+		return i, false
+	}
+	switch data[i] {
+	case '"':
+		return SkipStringAt(data, i)
+	case '{':
+		return validateObject(data, i)
+	case '[':
+		return validateArray(data, i)
+	}
+	return skipScalar(data, i)
+}
+
+func validateObject(data []byte, i int) (int, bool) {
+	i++
+	first := true
+	for {
+		i = SkipWS(data, i)
+		if i >= len(data) {
+			return i, false
+		}
+		if data[i] == '}' {
+			return i + 1, true
+		}
+		if !first {
+			next, ok := expectComma(data, i)
+			if !ok {
+				return i, false
+			}
+			i = next
+		}
+		first = false
+		end, ok := validateObjectEntry(data, i)
+		if !ok {
+			return i, false
+		}
+		i = end
+	}
+}
+
+func expectComma(data []byte, i int) (int, bool) {
+	if data[i] != ',' {
+		return i, false
+	}
+	j := SkipWS(data, i+1)
+	if j >= len(data) {
+		return i, false
+	}
+	return j, true
+}
+
+func validateObjectEntry(data []byte, i int) (int, bool) {
+	if data[i] != '"' {
+		return i, false
+	}
+	end, ok := SkipStringAt(data, i)
+	if !ok {
+		return i, false
+	}
+	j := SkipWS(data, end)
+	if j >= len(data) || data[j] != ':' {
+		return i, false
+	}
+	return validateValue(data, j+1)
+}
+
+func validateArray(data []byte, i int) (int, bool) {
+	i++
+	first := true
+	for {
+		i = SkipWS(data, i)
+		if i >= len(data) {
+			return i, false
+		}
+		if data[i] == ']' {
+			return i + 1, true
+		}
+		if !first {
+			if data[i] != ',' {
+				return i, false
+			}
+			i++
+		}
+		first = false
+		end, ok := validateValue(data, i)
+		if !ok {
+			return i, false
+		}
+		i = end
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Decoders
+// ---------------------------------------------------------------------------
+
+// DecodeString decodes a JSON string (including surrounding quotes)
+// into its Go form. The returned string is a fresh allocation.
+func DecodeString(raw []byte) (string, bool) {
+	if len(raw) < 2 || raw[0] != '"' || raw[len(raw)-1] != '"' {
+		return "", false
+	}
+	body := raw[1 : len(raw)-1]
+	if !bytesContainBackslash(body) {
+		return string(body), true
+	}
+	out := make([]byte, 0, len(body))
+	out, ok := appendDecoded(out, body)
+	if !ok {
+		return "", false
+	}
+	return string(out), true
+}
+
+// DecodeBool decodes "true" or "false".
+func DecodeBool(raw []byte) (value, ok bool) {
+	switch len(raw) {
+	case 4:
+		if string(raw) == "true" {
+			return true, true
+		}
+	case 5:
+		if string(raw) == "false" {
+			return false, true
+		}
+	}
+	return false, false
+}
+
+// DecodeInt64 decodes a JSON integer. Rejects fractional forms,
+// exponents, leading '+' and leading zeros (except "0" and "-0").
+func DecodeInt64(raw []byte) (int64, bool) {
+	if !isJSONInteger(raw) {
+		return 0, false
+	}
+	v, err := strconv.ParseInt(bytesToString(raw), 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
+}
+
+// DecodeUint64 decodes a non-negative JSON integer. Same rejection
+// rules as DecodeInt64.
+func DecodeUint64(raw []byte) (uint64, bool) {
+	if !isJSONInteger(raw) || raw[0] == '-' {
+		return 0, false
+	}
+	v, err := strconv.ParseUint(bytesToString(raw), 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
+}
+
+// DecodeFloat64 decodes any RFC 8259 number into a float64. NaN and
+// Inf are rejected.
+func DecodeFloat64(raw []byte) (float64, bool) {
+	end, ok := skipNumber(raw, 0)
+	if !ok || end != len(raw) {
+		return 0, false
+	}
+	v, err := strconv.ParseFloat(bytesToString(raw), 64)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
+}
+
+func isJSONInteger(raw []byte) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	i := 0
+	if raw[0] == '-' {
+		i = 1
+		if i == len(raw) {
+			return false
+		}
+	}
+	if raw[i] == '0' {
+		return i+1 == len(raw)
+	}
+	if raw[i] < '1' || raw[i] > '9' {
+		return false
+	}
+	for ; i < len(raw); i++ {
+		if raw[i] < '0' || raw[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// bytesToString returns a read-only string view over raw.
+//
+//nolint:gosec // unsafe.String: zero-alloc borrow for strconv
+func bytesToString(raw []byte) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	return unsafe.String(&raw[0], len(raw))
+}
+
+// appendDecoded decodes a JSON string body (no quotes) into dst.
+func appendDecoded(dst, src []byte) ([]byte, bool) {
+	i := 0
+	for i < len(src) {
+		if src[i] != '\\' {
+			dst = append(dst, src[i])
+			i++
+			continue
+		}
+		next, out, ok := decodeEscape(src, i, dst)
+		if !ok {
+			return nil, false
+		}
+		dst = out
+		i = next
+	}
+	return dst, true
+}
+
+func decodeEscape(src []byte, i int, dst []byte) (next int, out []byte, ok bool) {
+	if i+1 >= len(src) {
+		return 0, dst, false
+	}
+	esc := src[i+1]
+	if esc == 'u' {
+		r, consumed, ok := decodeUnicodeEscape(src, i)
+		if !ok {
+			return 0, dst, false
+		}
+		return i + consumed, appendRuneUTF8(dst, r), true
+	}
+	decoded := shortEscapeByte[esc]
+	if decoded == 0 {
+		return 0, dst, false
+	}
+	return i + 2, append(dst, decoded), true
+}
+
+func appendRuneUTF8(dst []byte, r rune) []byte {
+	switch {
+	case r < 0x80:
+		return append(dst, utf8Byte(r))
+	case r < 0x800:
+		return append(dst,
+			utf8Byte(0xC0|r>>6),
+			utf8Byte(0x80|r&0x3F),
+		)
+	case r < 0x10000:
+		return append(dst,
+			utf8Byte(0xE0|r>>12),
+			utf8Byte(0x80|(r>>6)&0x3F),
+			utf8Byte(0x80|r&0x3F),
+		)
+	default:
+		return append(dst,
+			utf8Byte(0xF0|r>>18),
+			utf8Byte(0x80|(r>>12)&0x3F),
+			utf8Byte(0x80|(r>>6)&0x3F),
+			utf8Byte(0x80|r&0x3F),
+		)
+	}
+}

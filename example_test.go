@@ -107,7 +107,7 @@ func ExampleBuilder_AddFloat64Field() {
 func ExampleIsStructuralJSON() {
 	fmt.Println(jsonfast.IsStructuralJSON(`{"key":"value"}`))
 	fmt.Println(jsonfast.IsStructuralJSON(`not json`))
-	fmt.Println(jsonfast.IsStructuralJSON(`{not json}`)) // structurally invalid
+	fmt.Println(jsonfast.IsStructuralJSON(`{not json}`))
 	// Output:
 	// true
 	// false
@@ -115,7 +115,6 @@ func ExampleIsStructuralJSON() {
 }
 
 func ExampleNewFieldKey() {
-	// Lift static field names out of the hot path.
 	var keyLevel = jsonfast.NewFieldKey("level")
 
 	b := jsonfast.New(64)
@@ -128,9 +127,6 @@ func ExampleNewFieldKey() {
 }
 
 func ExampleWarmPool() {
-	// Pre-seed the pool before the hot path begins. Only the first
-	// Acquire after program start touches the allocator; subsequent
-	// Acquire/Release pairs are zero-alloc.
 	jsonfast.WarmPool(128)
 
 	b := jsonfast.Acquire()

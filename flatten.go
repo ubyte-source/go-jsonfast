@@ -5,21 +5,8 @@ import (
 	"slices"
 )
 
-// FlattenMap flattens a nested map[string]map[string]string into a flat
-// map[string]string using dot-notation keys: outer.inner → value.
-//
-// If dst is nil, a new map with an exact capacity hint is allocated.
-// If dst is non-nil and has sufficient capacity for all flattened keys,
-// the only allocation is one string per entry (for the dot-joined key),
-// driven by the map insertion itself.
-//
-// Example:
-//
-//	nested := map[string]map[string]string{
-//	    "sd@123": {"key1": "val1", "key2": "val2"},
-//	}
-//	flat := jsonfast.FlattenMap(nested, nil)
-//	// flat == {"sd@123.key1": "val1", "sd@123.key2": "val2"}
+// FlattenMap flattens a nested map into outer.inner → value form. If
+// dst is nil a new map is allocated sized to the total entry count.
 func FlattenMap(m map[string]map[string]string, dst map[string]string) map[string]string {
 	if len(m) == 0 {
 		return dst
@@ -39,15 +26,10 @@ func FlattenMap(m map[string]map[string]string, dst map[string]string) map[strin
 	return dst
 }
 
-// flatEntry holds an outer.inner=val triple for sorted flattened map
-// emission inside AddFlattenedMapField.
 type flatEntry struct {
 	outer, inner, val string
 }
 
-// compareFlatEntries compares two flatEntry values by outer key, then
-// inner key. Defined as a package-level function to avoid closure
-// allocation at the SortFunc call site.
 func compareFlatEntries(a, b flatEntry) int {
 	if c := cmp.Compare(a.outer, b.outer); c != 0 {
 		return c
@@ -55,14 +37,9 @@ func compareFlatEntries(a, b flatEntry) int {
 	return cmp.Compare(a.inner, b.inner)
 }
 
-// AddFlattenedMapField writes nested map data as flattened
-// "outer.inner":"value" fields directly into the JSON object being built,
-// without materializing an intermediate flat map. Keys are sorted for
-// deterministic output.
-//
-// Zero allocation when the total number of flattened entries is at most
-// 16 (stack-allocated sort buffer). Larger maps fall back to one heap
-// allocation for the sort buffer.
+// AddFlattenedMapField emits nested map data as sorted
+// "outer.inner":"value" fields into the current object. Up to 16 total
+// entries fit in a stack buffer; larger maps allocate once.
 func (b *Builder) AddFlattenedMapField(m map[string]map[string]string) {
 	if len(m) == 0 {
 		return
@@ -92,9 +69,9 @@ func (b *Builder) AddFlattenedMapField(m map[string]map[string]string) {
 	for _, e := range entries {
 		b.sep()
 		b.buf = append(b.buf, '"')
-		b.buf = append(b.buf, e.outer...)
+		b.escapeString(e.outer)
 		b.buf = append(b.buf, '.')
-		b.buf = append(b.buf, e.inner...)
+		b.escapeString(e.inner)
 		b.buf = append(b.buf, '"', ':', '"')
 		b.escapeString(e.val)
 		b.buf = append(b.buf, '"')

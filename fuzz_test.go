@@ -6,10 +6,6 @@ import (
 	"testing"
 )
 
-// Fuzzers for the structural scanners and validators. Each target
-// asserts its documented invariants and cross-checks against
-// encoding/json where the contracts match. Run with `make fuzz`.
-
 func FuzzSkipStringAt(f *testing.F) {
 	f.Add([]byte(`"hello"`))
 	f.Add([]byte(`"he\"llo"`))
@@ -65,7 +61,7 @@ func FuzzIterateFields(f *testing.F) {
 				t.Errorf("callback received malformed key %q", k)
 				return false
 			}
-			return count < 1024 // bound iteration
+			return count < 1024
 		})
 	})
 }
@@ -80,21 +76,15 @@ func FuzzFindField(f *testing.F) {
 		if ok && len(val) == 0 {
 			t.Errorf("FindField returned ok with empty value")
 		}
-		// Cross-check against encoding/json where the input parses:
-		// if json.Unmarshal succeeds into map[string]json.RawMessage,
-		// our FindField result must agree for the first occurrence.
 		var m map[string]json.RawMessage
 		if json.Unmarshal(data, &m) != nil {
 			return
 		}
 		want, exists := m[key]
 		if exists != ok {
-			// Structural FindField may disagree on duplicate keys or
-			// on grammar-tolerant inputs that encoding/json rejects.
 			return
 		}
 		if ok && !bytes.Equal(bytes.TrimSpace(want), bytes.TrimSpace(val)) {
-			// Whitespace handling differs; trimming both sides is enough.
 			t.Errorf("FindField(%q) = %q, want %q", key, val, want)
 		}
 	})
@@ -107,8 +97,6 @@ func FuzzIsStructuralJSON(f *testing.F) {
 	f.Add(`{"k":}`)
 	f.Add(`"hello"`)
 	f.Fuzz(func(t *testing.T, s string) {
-		// Invariants: never panic, and accepted inputs start with '{' or '['.
-		// Number and escape grammar beyond framing are out of scope per godoc.
 		ok := IsStructuralJSON(s)
 		if ok && len(s) >= 2 && s[0] != '{' && s[0] != '[' {
 			t.Errorf("IsStructuralJSON accepted a payload not starting with { or [: %q", s)
@@ -144,7 +132,60 @@ func FuzzFlattenObject(f *testing.F) {
 		b.BeginObject()
 		FlattenObject(b, data)
 		b.EndObject()
-		// Output may not be valid JSON if inputs have bare keys, but the
-		// call itself must not panic.
+	})
+}
+
+// FuzzRoundTripStructuralJSON asserts acceptance is a subset of encoding/json.Valid.
+func FuzzRoundTripStructuralJSON(f *testing.F) {
+	f.Add(`{"a":1,"b":[true,null,"x"]}`)
+	f.Add(`[1,2,3]`)
+	f.Add(`{}`)
+	f.Add(`[]`)
+	f.Add(`[00]`)
+	f.Add(`{"k":01}`)
+	f.Add(`{"k":1.}`)
+	f.Add(`{"k":1e}`)
+	f.Fuzz(func(t *testing.T, s string) {
+		if IsStructuralJSON(s) && !json.Valid([]byte(s)) {
+			t.Errorf("IsStructuralJSON accepted %q but encoding/json rejected it", s)
+		}
+	})
+}
+
+// FuzzRoundTripFindField cross-checks FindField against encoding/json,
+// skipping cases where the two libraries diverge (duplicate keys,
+// encoding/json normalizing invalid UTF-8 to U+FFFD).
+func FuzzRoundTripFindField(f *testing.F) {
+	f.Add([]byte(`{"a":1,"b":2}`))
+	f.Add([]byte(`{"quoted\"name":1,"plain":2}`))
+	f.Add([]byte(`{"caf\u00e9":"value"}`))
+	f.Add([]byte(`{"rocket \ud83d\ude80":"launch"}`))
+	f.Fuzz(func(t *testing.T, data []byte) {
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal(data, &m); err != nil {
+			return
+		}
+		topLevelKeys := 0
+		IterateFields(data, func(_, _ []byte) bool {
+			topLevelKeys++
+			return true
+		})
+		if topLevelKeys != len(m) {
+			return
+		}
+		for key, want := range m {
+			encoded, err := json.Marshal(key)
+			if err != nil || !bytes.Contains(data, encoded) {
+				continue
+			}
+			val, ok := FindField(data, key)
+			if !ok {
+				t.Errorf("FindField(%q) = not found; encoding/json decoded %q", key, want)
+				continue
+			}
+			if !bytes.Equal(bytes.TrimSpace(want), bytes.TrimSpace(val)) {
+				t.Errorf("FindField(%q) = %q, want %q", key, val, want)
+			}
+		}
 	})
 }

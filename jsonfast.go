@@ -10,18 +10,15 @@ import (
 	"unsafe"
 )
 
-// Builder is a minimal JSON builder that operates on a reusable byte slice.
-// It avoids allocations by appending directly into the buffer. Not a fully
-// general-purpose JSON writer; tailored for known field sets.
-//
-// A Builder is not safe for concurrent use.
+// Builder appends JSON into a reusable byte slice. Not safe for
+// concurrent use.
 type Builder struct {
 	buf   []byte
 	first bool
 }
 
-// New creates a new Builder with the given initial capacity. A non-positive
-// capacity is clamped to 256 bytes.
+// New returns a Builder with the given initial capacity. Non-positive
+// capacities are clamped to 256.
 func New(capacity int) *Builder {
 	if capacity <= 0 {
 		capacity = 256
@@ -32,41 +29,33 @@ func New(capacity int) *Builder {
 	}
 }
 
-// Reset clears the Builder for reuse. The underlying buffer is retained.
+// Reset clears the buffer contents while retaining the backing array.
 func (b *Builder) Reset() {
 	b.buf = b.buf[:0]
 	b.first = true
 }
 
-// Bytes returns the accumulated bytes. The returned slice aliases the
-// internal buffer; do not modify it, and do not use it after Reset or
-// Release.
-func (b *Builder) Bytes() []byte {
-	return b.buf
-}
+// Bytes returns the accumulated bytes. The slice aliases the internal
+// buffer and must not be used after Reset or Release.
+func (b *Builder) Bytes() []byte { return b.buf }
 
-// Len returns the current byte length of the buffer.
-func (b *Builder) Len() int {
-	return len(b.buf)
-}
+// Len returns the current buffer length.
+func (b *Builder) Len() int { return len(b.buf) }
 
-// Grow ensures the buffer has at least n bytes of spare capacity. Uses
-// slices.Grow which leverages the runtime's optimized growslice.
+// Grow ensures at least n bytes of spare capacity.
 func (b *Builder) Grow(n int) {
 	if cap(b.buf)-len(b.buf) < n {
 		b.buf = slices.Grow(b.buf, n)
 	}
 }
 
-// Write implements io.Writer. Bytes are appended unchanged to the
-// buffer; Write never returns an error.
+// Write implements io.Writer. It never returns an error.
 func (b *Builder) Write(p []byte) (int, error) {
 	b.buf = append(b.buf, p...)
 	return len(p), nil
 }
 
-// WriteTo implements io.WriterTo. The accumulated bytes are written to w
-// in a single call. The Builder state is unchanged.
+// WriteTo implements io.WriterTo. The Builder state is unchanged.
 func (b *Builder) WriteTo(w io.Writer) (int64, error) {
 	n, err := w.Write(b.buf)
 	return int64(n), err
@@ -79,11 +68,30 @@ func (b *Builder) BeginObject() {
 }
 
 // EndObject writes '}'.
-func (b *Builder) EndObject() {
-	b.buf = append(b.buf, '}')
+func (b *Builder) EndObject() { b.buf = append(b.buf, '}') }
+
+// BeginObjectField opens a nested object as "name":{, ready for inner
+// Add*Field calls. Pair with EndObjectField.
+func (b *Builder) BeginObjectField(name string) {
+	b.fieldKey(name)
+	b.buf = append(b.buf, '{')
+	b.first = true
 }
 
-// sep writes a comma before non-first fields.
+// BeginObjectFieldKey opens a nested object with a pre-computed key.
+func (b *Builder) BeginObjectFieldKey(k FieldKey) {
+	b.precomputedKey(k)
+	b.buf = append(b.buf, '{')
+	b.first = true
+}
+
+// EndObjectField closes a nested object opened by BeginObjectField or
+// BeginObjectFieldKey and restores the outer separator state.
+func (b *Builder) EndObjectField() {
+	b.buf = append(b.buf, '}')
+	b.first = false
+}
+
 func (b *Builder) sep() {
 	if b.first {
 		b.first = false
@@ -92,16 +100,15 @@ func (b *Builder) sep() {
 	b.buf = append(b.buf, ',')
 }
 
-// fieldKey writes the JSON field-key prefix, optionally preceded by the
-// separator comma. name must be safe ASCII (no escaping required).
+// fieldKey writes [,]"name": with name escaped.
 func (b *Builder) fieldKey(name string) {
 	b.sep()
 	b.buf = append(b.buf, '"')
-	b.buf = append(b.buf, name...)
+	b.escapeString(name)
 	b.buf = append(b.buf, '"', ':')
 }
 
-// AddStringField adds a "name":"value" field. The value is JSON-escaped.
+// AddStringField adds "name":"value" with value escaping.
 func (b *Builder) AddStringField(name, value string) {
 	b.fieldKey(name)
 	b.buf = append(b.buf, '"')
@@ -109,21 +116,20 @@ func (b *Builder) AddStringField(name, value string) {
 	b.buf = append(b.buf, '"')
 }
 
-// AddRawJSONField adds a "name":<raw json> field without escaping. The
-// caller must ensure rawJSON is well-formed JSON.
+// AddStringArrayField adds "name":["v1","v2",...] with value escaping.
+func (b *Builder) AddStringArrayField(name string, values []string) {
+	b.fieldKey(name)
+	b.appendStringArray(values)
+}
+
+// AddRawJSONField adds "name":<raw> without escaping. rawJSON must be
+// well-formed JSON.
 func (b *Builder) AddRawJSONField(name string, rawJSON []byte) {
 	b.fieldKey(name)
 	b.buf = append(b.buf, rawJSON...)
 }
 
-// AddRawJSONFieldString is like AddRawJSONField but takes a string,
-// avoiding the []byte conversion allocation at the call site.
-func (b *Builder) AddRawJSONFieldString(name, rawJSON string) {
-	b.fieldKey(name)
-	b.buf = append(b.buf, rawJSON...)
-}
-
-// AddBoolField adds a "name":true/false field.
+// AddBoolField adds "name":true or "name":false.
 func (b *Builder) AddBoolField(name string, v bool) {
 	b.fieldKey(name)
 	if v {
@@ -133,19 +139,19 @@ func (b *Builder) AddBoolField(name string, v bool) {
 	}
 }
 
-// AddNullField adds a "name":null field.
+// AddNullField adds "name":null.
 func (b *Builder) AddNullField(name string) {
 	b.fieldKey(name)
 	b.buf = append(b.buf, "null"...)
 }
 
-// AddIntField adds a "name":<int> field.
+// AddIntField adds "name":<int>.
 func (b *Builder) AddIntField(name string, v int) {
 	b.fieldKey(name)
 	b.appendInt(v)
 }
 
-// AddInt64Field adds a "name":<int64> field.
+// AddInt64Field adds "name":<int64>.
 func (b *Builder) AddInt64Field(name string, v int64) {
 	b.fieldKey(name)
 	if v < 0 {
@@ -156,67 +162,37 @@ func (b *Builder) AddInt64Field(name string, v int64) {
 	b.appendUint(uint64(v))
 }
 
-// AddUint8Field adds a "name":<uint8> field.
-func (b *Builder) AddUint8Field(name string, v uint8) {
-	b.fieldKey(name)
-	b.appendUint(uint64(v))
-}
-
-// AddUint16Field adds a "name":<uint16> field.
-func (b *Builder) AddUint16Field(name string, v uint16) {
-	b.fieldKey(name)
-	b.appendUint(uint64(v))
-}
-
-// AddUint32Field adds a "name":<uint32> field.
-func (b *Builder) AddUint32Field(name string, v uint32) {
-	b.fieldKey(name)
-	b.appendUint(uint64(v))
-}
-
-// AddUint64Field adds a "name":<uint64> field.
-func (b *Builder) AddUint64Field(name string, v uint64) {
-	b.fieldKey(name)
-	b.appendUint(v)
-}
-
-// AddFloat64Field adds a "name":<float64> field. NaN and ±Inf are emitted
-// as null because JSON (RFC 8259) does not represent non-finite numbers.
-// Integer values are emitted without a decimal point; fractional values
-// use strconv.AppendFloat with full precision.
+// AddFloat64Field adds "name":<float64>. NaN and ±Inf are emitted as null.
 func (b *Builder) AddFloat64Field(name string, v float64) {
 	b.fieldKey(name)
 	b.appendFloat64(v)
 }
 
-// AddTimeRFC3339Field adds a "name":"<RFC3339>" field. The output is
-// always in UTC regardless of the input timezone because computation
-// uses t.Unix() (timezone-independent). Negative timestamps are clamped
-// to the epoch; years beyond 9999 are clamped to 9999.
+// AddTimeRFC3339Field adds "name":"<RFC3339>" in UTC. Years are clamped
+// to [0, 9999]; pre-epoch timestamps are clamped to the epoch.
 func (b *Builder) AddTimeRFC3339Field(name string, t time.Time) {
 	b.fieldKey(name)
 	b.appendTimeRFC3339(t)
 }
 
-// AppendRaw appends raw bytes to the buffer without escaping or framing.
-func (b *Builder) AppendRaw(p []byte) {
-	b.buf = append(b.buf, p...)
+// AddTimeRFC3339OffsetField adds "name":"<RFC3339>" preserving the
+// input timezone offset (Z, +HH:MM, or -HH:MM).
+func (b *Builder) AddTimeRFC3339OffsetField(name string, t time.Time) {
+	b.fieldKey(name)
+	b.appendTimeRFC3339Offset(t)
 }
 
-// AppendRawString appends a raw string to the buffer without escaping or
-// framing.
-func (b *Builder) AppendRawString(s string) {
-	b.buf = append(b.buf, s...)
-}
+// AppendRaw appends raw bytes.
+func (b *Builder) AppendRaw(p []byte) { b.buf = append(b.buf, p...) }
 
-// AppendEscapedString appends s with JSON special characters escaped
-// directly into the buffer (no enclosing quotes).
-func (b *Builder) AppendEscapedString(s string) {
-	b.escapeString(s)
-}
+// AppendRawString appends a raw string.
+func (b *Builder) AppendRawString(s string) { b.buf = append(b.buf, s...) }
 
-// AddRawBytesField adds a "name":<value> field where name is raw bytes
-// (no quoting or escaping is performed) and value is raw JSON bytes.
+// AppendEscapedString appends s with JSON escaping (no surrounding quotes).
+func (b *Builder) AppendEscapedString(s string) { b.escapeString(s) }
+
+// AddRawBytesField adds "name":<value> where name and value are copied
+// verbatim.
 func (b *Builder) AddRawBytesField(name, value []byte) {
 	b.sep()
 	b.buf = append(b.buf, '"')
@@ -225,13 +201,9 @@ func (b *Builder) AddRawBytesField(name, value []byte) {
 	b.buf = append(b.buf, value...)
 }
 
-// AddStringMapObject writes m as a JSON object {...} at the current
-// position. Keys are sorted for deterministic output. If rawJSONKey is
-// non-empty, values for that key are embedded as raw JSON when they pass
-// structural validation via IsStructuralJSON. This method does not add a
-// field name — it writes just the object.
-//
-// Zero allocation for maps with at most 8 keys (stack-allocated sort buffer).
+// AddStringMapObject writes m as a standalone JSON object (no name, no
+// leading comma). Keys are sorted. If rawJSONKey is non-empty, values
+// for that key are embedded as raw JSON when IsStructuralJSON accepts them.
 func (b *Builder) AddStringMapObject(m map[string]string, rawJSONKey string) {
 	b.BeginObject()
 	var stack [8]string
@@ -248,7 +220,8 @@ func (b *Builder) AddStringMapObject(m map[string]string, rawJSONKey string) {
 	for _, k := range keys {
 		v := m[k]
 		if rawJSONKey != "" && k == rawJSONKey && IsStructuralJSON(v) {
-			b.AddRawJSONFieldString(k, v)
+			b.fieldKey(k)
+			b.buf = append(b.buf, v...)
 			continue
 		}
 		b.AddStringField(k, v)
@@ -256,12 +229,16 @@ func (b *Builder) AddStringMapObject(m map[string]string, rawJSONKey string) {
 	b.EndObject()
 }
 
-// AddNestedStringMapField adds a "name":{outer:{inner:"v",...},...} field
-// with keys sorted at both levels for deterministic output.
-//
-// Zero allocation when every map (outer and each inner) has at most 8
-// keys; larger maps fall back to one heap allocation per oversized map
-// for the sort buffer.
+// AddStringMapObjectField adds "name":{...} with m encoded as a JSON
+// object. Semantics match AddStringMapObject.
+func (b *Builder) AddStringMapObjectField(name string, m map[string]string, rawJSONKey string) {
+	b.fieldKey(name)
+	b.AddStringMapObject(m, rawJSONKey)
+	b.first = false
+}
+
+// AddNestedStringMapField adds "name":{outer:{inner:"v"}}, keys sorted
+// at both levels.
 func (b *Builder) AddNestedStringMapField(name string, m map[string]map[string]string) {
 	if len(m) == 0 {
 		return
@@ -295,8 +272,6 @@ func (b *Builder) AddNestedStringMapField(name string, m map[string]map[string]s
 	b.buf = append(b.buf, '}')
 }
 
-// writeInnerMap writes a sorted map[string]string as key-value pairs.
-// Zero allocation when len(m) ≤ 8.
 func (b *Builder) writeInnerMap(m map[string]string) {
 	var stack [8]string
 	var keys []string
@@ -321,30 +296,24 @@ func (b *Builder) writeInnerMap(m map[string]string) {
 	}
 }
 
-// FieldKey is a pre-computed JSON field key prefix that stores `,"name":`.
-// The non-comma form is obtained by slicing the first byte. Instances
-// should be constructed via NewFieldKey, or as typed string literals
-// matching the documented layout (`,"name":` where name is safe ASCII).
+// FieldKey is a pre-computed field prefix in the form `,"name":`.
 type FieldKey string
 
-// NewFieldKey returns a pre-computed key for the given name. The name
-// must be safe ASCII (no escaping required). Call at init time, not on
-// the hot path; the returned value can be stored in a package-level var.
+// NewFieldKey returns a FieldKey for the given safe-ASCII name.
 func NewFieldKey(name string) FieldKey {
 	return FieldKey(`,"` + name + `":`)
 }
 
-// precomputedKey writes the pre-computed field key prefix.
 func (b *Builder) precomputedKey(k FieldKey) {
 	if b.first {
 		b.first = false
-		b.buf = append(b.buf, k[1:]...) // skip leading comma
+		b.buf = append(b.buf, k[1:]...)
 		return
 	}
 	b.buf = append(b.buf, k...)
 }
 
-// AddStringFieldKey adds a "name":"value" field using a pre-computed key.
+// AddStringFieldKey adds "name":"value" using a pre-computed key.
 func (b *Builder) AddStringFieldKey(k FieldKey, value string) {
 	b.precomputedKey(k)
 	b.buf = append(b.buf, '"')
@@ -352,13 +321,32 @@ func (b *Builder) AddStringFieldKey(k FieldKey, value string) {
 	b.buf = append(b.buf, '"')
 }
 
-// AddIntFieldKey adds a "name":<int> field using a pre-computed key.
+// AddStringArrayFieldKey adds "name":["v1",...] using a pre-computed key.
+func (b *Builder) AddStringArrayFieldKey(k FieldKey, values []string) {
+	b.precomputedKey(k)
+	b.appendStringArray(values)
+}
+
+func (b *Builder) appendStringArray(values []string) {
+	b.buf = append(b.buf, '[')
+	for i, v := range values {
+		if i > 0 {
+			b.buf = append(b.buf, ',')
+		}
+		b.buf = append(b.buf, '"')
+		b.escapeString(v)
+		b.buf = append(b.buf, '"')
+	}
+	b.buf = append(b.buf, ']')
+}
+
+// AddIntFieldKey adds "name":<int> using a pre-computed key.
 func (b *Builder) AddIntFieldKey(k FieldKey, v int) {
 	b.precomputedKey(k)
 	b.appendInt(v)
 }
 
-// AddInt64FieldKey adds a "name":<int64> field using a pre-computed key.
+// AddInt64FieldKey adds "name":<int64> using a pre-computed key.
 func (b *Builder) AddInt64FieldKey(k FieldKey, v int64) {
 	b.precomputedKey(k)
 	if v < 0 {
@@ -369,13 +357,13 @@ func (b *Builder) AddInt64FieldKey(k FieldKey, v int64) {
 	b.appendUint(uint64(v))
 }
 
-// AddUint64FieldKey adds a "name":<uint64> field using a pre-computed key.
+// AddUint64FieldKey adds "name":<uint64> using a pre-computed key.
 func (b *Builder) AddUint64FieldKey(k FieldKey, v uint64) {
 	b.precomputedKey(k)
 	b.appendUint(v)
 }
 
-// AddBoolFieldKey adds a "name":true/false field using a pre-computed key.
+// AddBoolFieldKey adds "name":true or "name":false using a pre-computed key.
 func (b *Builder) AddBoolFieldKey(k FieldKey, v bool) {
 	b.precomputedKey(k)
 	if v {
@@ -385,34 +373,32 @@ func (b *Builder) AddBoolFieldKey(k FieldKey, v bool) {
 	}
 }
 
-// AddRawJSONFieldKey adds a "name":<raw json> field using a pre-computed key.
+// AddRawJSONFieldKey adds "name":<raw> using a pre-computed key.
 func (b *Builder) AddRawJSONFieldKey(k FieldKey, rawJSON []byte) {
 	b.precomputedKey(k)
 	b.buf = append(b.buf, rawJSON...)
 }
 
-// AddRawJSONFieldKeyString adds a "name":<raw json> field using a
-// pre-computed key, taking the raw JSON as a string.
-func (b *Builder) AddRawJSONFieldKeyString(k FieldKey, rawJSON string) {
-	b.precomputedKey(k)
-	b.buf = append(b.buf, rawJSON...)
-}
-
-// AddTimeRFC3339FieldKey adds a "name":"<RFC3339>" field in UTC using a
-// pre-computed key. See AddTimeRFC3339Field for clamping semantics.
+// AddTimeRFC3339FieldKey adds "name":"<RFC3339>" in UTC using a pre-computed key.
 func (b *Builder) AddTimeRFC3339FieldKey(k FieldKey, t time.Time) {
 	b.precomputedKey(k)
 	b.appendTimeRFC3339(t)
 }
 
-// AddFloat64FieldKey adds a "name":<float64> field using a pre-computed
-// key. See AddFloat64Field for NaN/Inf handling.
+// AddTimeRFC3339OffsetFieldKey adds "name":"<RFC3339>" preserving the
+// timezone offset, using a pre-computed key.
+func (b *Builder) AddTimeRFC3339OffsetFieldKey(k FieldKey, t time.Time) {
+	b.precomputedKey(k)
+	b.appendTimeRFC3339Offset(t)
+}
+
+// AddFloat64FieldKey adds "name":<float64> using a pre-computed key.
 func (b *Builder) AddFloat64FieldKey(k FieldKey, v float64) {
 	b.precomputedKey(k)
 	b.appendFloat64(v)
 }
 
-// AddNullFieldKey adds a "name":null field using a pre-computed key.
+// AddNullFieldKey adds "name":null using a pre-computed key.
 func (b *Builder) AddNullFieldKey(k FieldKey) {
 	b.precomputedKey(k)
 	b.buf = append(b.buf, "null"...)
@@ -422,8 +408,7 @@ func (b *Builder) AddNullFieldKey(k FieldKey) {
 // String escaping
 // ---------------------------------------------------------------------------
 
-// safeASCII reports whether a byte is safe inside a JSON string without
-// escaping: printable ASCII in [0x20, 0x7F) excluding '"' and '\\'.
+// safeASCII[b] is true for printable ASCII other than '"' and '\\'.
 var safeASCII = buildSafeASCII()
 
 func buildSafeASCII() [256]bool {
@@ -436,11 +421,9 @@ func buildSafeASCII() [256]bool {
 	return t
 }
 
-// escapeString escapes JSON special characters and validates UTF-8.
-// Invalid UTF-8 bytes are replaced with U+FFFD per RFC 8259 §8.
+// escapeString writes s with JSON escaping and UTF-8 validation;
+// invalid UTF-8 bytes are replaced with U+FFFD.
 func (b *Builder) escapeString(s string) {
-	// Fast path: short strings are classified by table lookup; the SWAR
-	// setup cost is not amortized below 33 bytes.
 	if len(s) <= 32 {
 		for i := 0; i < len(s); i++ {
 			if !safeASCII[s[i]] {
@@ -454,9 +437,6 @@ func (b *Builder) escapeString(s string) {
 	b.escapeSlow(s, 0)
 }
 
-// escapeSlow is the full escape path. The already-verified prefix s[:start]
-// is emitted as a single append, then SWAR scanning and per-byte emission
-// handle the remainder.
 func (b *Builder) escapeSlow(s string, start int) {
 	if start > 0 {
 		b.buf = append(b.buf, s[:start]...)
@@ -480,9 +460,7 @@ func (b *Builder) escapeSlow(s string, start int) {
 }
 
 // swarScanSafe returns the index of the first byte at or after i that
-// requires JSON escaping (or len(s) if all bytes are safe). Uses word-
-// at-a-time SWAR for the 8-byte-aligned main run and a byte table for
-// the tail.
+// requires escaping, or len(s) if all remaining bytes are safe.
 //
 //nolint:gosec // unsafe pointer math is load-bearing for SWAR throughput
 func swarScanSafe(s string, i int) int {
@@ -504,8 +482,6 @@ func swarScanSafe(s string, i int) int {
 	return j
 }
 
-// escapeASCIIByte writes the JSON escape sequence for a single ASCII byte
-// that requires escaping.
 func (b *Builder) escapeASCIIByte(c byte) {
 	if e := shortEscape[c]; e != 0 {
 		b.buf = append(b.buf, '\\', e)
@@ -514,8 +490,7 @@ func (b *Builder) escapeASCIIByte(c byte) {
 	b.buf = append(b.buf, '\\', 'u', '0', '0', hexDigits[c>>4], hexDigits[c&0x0f])
 }
 
-// shortEscape maps bytes to their single-char JSON escape character.
-// Non-zero entries mean the byte is escaped as \X where X is the value.
+// shortEscape maps a byte to its single-char JSON escape letter, or 0.
 var shortEscape = [256]byte{
 	'"':  '"',
 	'\\': '\\',
@@ -526,43 +501,38 @@ var shortEscape = [256]byte{
 	'\t': 't',
 }
 
-// hexDigits maps a nibble [0..15] to its hex character. Using a fixed
-// [16]byte eliminates bounds checks since c>>4 and c&0x0f are always <16.
 var hexDigits = [16]byte{
 	'0', '1', '2', '3', '4', '5', '6', '7',
 	'8', '9', 'a', 'b', 'c', 'd', 'e', 'f',
 }
 
-// escapeMultiByte validates and writes a multi-byte UTF-8 sequence.
-// Rejects overlong encodings, surrogate halves (U+D800–U+DFFF), and
-// codepoints above U+10FFFF per RFC 8259 §8. Returns the number of
-// bytes consumed.
+// escapeMultiByte validates a UTF-8 sequence and copies it verbatim on
+// success, or replaces it with U+FFFD and returns the bytes consumed.
 func (b *Builder) escapeMultiByte(s string, i int) int {
 	size := utf8SeqLen(s[i])
 	if size == 0 || i+size > len(s) || !validContinuation(s, i, size) {
-		b.buf = append(b.buf, 0xEF, 0xBF, 0xBD) // U+FFFD
+		b.buf = append(b.buf, 0xEF, 0xBF, 0xBD)
 		return 1
 	}
 	if !validCodepoint(s, i, size) {
-		b.buf = append(b.buf, 0xEF, 0xBF, 0xBD) // U+FFFD
+		b.buf = append(b.buf, 0xEF, 0xBF, 0xBD)
 		return size
 	}
 	b.buf = append(b.buf, s[i:i+size]...)
 	return size
 }
 
-// validCodepoint checks for overlong encodings, surrogates, and out-of-
-// range codepoints. Called after validContinuation confirms byte-level
-// structure.
+// validCodepoint rejects overlong encodings, surrogates, and codepoints
+// above U+10FFFF. Called after validContinuation.
 func validCodepoint(s string, i, size int) bool {
-	_ = s[i+size-1] // BCE hint: caller guarantees i+size <= len(s)
+	_ = s[i+size-1]
 	switch size {
 	case 3:
-		_ = s[i+2] // BCE hint for the three accesses below
+		_ = s[i+2]
 		cp := rune(s[i]&0x0F)<<12 | rune(s[i+1]&0x3F)<<6 | rune(s[i+2]&0x3F)
 		return cp >= 0x0800 && (cp < 0xD800 || cp > 0xDFFF)
 	case 4:
-		_ = s[i+3] // BCE hint for the four accesses below
+		_ = s[i+3]
 		cp := rune(s[i]&0x07)<<18 | rune(s[i+1]&0x3F)<<12 |
 			rune(s[i+2]&0x3F)<<6 | rune(s[i+3]&0x3F)
 		return cp >= 0x10000 && cp <= 0x10FFFF
@@ -570,26 +540,24 @@ func validCodepoint(s string, i, size int) bool {
 	return true
 }
 
-// utf8SeqLen returns the expected byte length for a UTF-8 leading byte,
-// or 0 if invalid. Rejects overlong 2-byte leaders (0xC0-0xC1) and
-// out-of-range 4-byte leaders (0xF5+).
+// utf8SeqLen returns the byte length implied by a UTF-8 leading byte,
+// or 0 if it is not a valid leader.
 func utf8SeqLen(c byte) int {
 	switch {
-	case c >= 0xC2 && c <= 0xDF: // 2-byte; reject 0xC0-0xC1 (overlong ASCII)
+	case c >= 0xC2 && c <= 0xDF:
 		return 2
-	case c&0xF0 == 0xE0: // 3-byte (0xE0-0xEF)
+	case c&0xF0 == 0xE0:
 		return 3
-	case c >= 0xF0 && c <= 0xF4: // 4-byte; reject 0xF5+ (> U+10FFFF)
+	case c >= 0xF0 && c <= 0xF4:
 		return 4
 	default:
 		return 0
 	}
 }
 
-// validContinuation checks that bytes s[i+1..i+size-1] are valid
-// continuation bytes (10xxxxxx).
+// validContinuation reports whether s[i+1..i+size-1] are continuation bytes.
 func validContinuation(s string, i, size int) bool {
-	_ = s[i+size-1] // BCE hint: caller guarantees i+size <= len(s)
+	_ = s[i+size-1]
 	switch size {
 	case 2:
 		return s[i+1]&0xC0 == 0x80
@@ -601,10 +569,9 @@ func validContinuation(s string, i, size int) bool {
 	return false
 }
 
-// EscapeString returns s with JSON special characters escaped per
-// RFC 8259. If no escaping is needed (pure safe ASCII), s is returned
-// unchanged (zero allocation). Invalid UTF-8 bytes are replaced with
-// U+FFFD, matching the escape behavior used by Builder field methods.
+// EscapeString returns s with JSON escaping. If s is already safe ASCII
+// it is returned unchanged (zero allocation). Invalid UTF-8 bytes are
+// replaced with U+FFFD.
 func EscapeString(s string) string {
 	if swarScanSafe(s, 0) == len(s) {
 		return s
@@ -624,11 +591,8 @@ func EscapeString(s string) string {
 // Integer formatting
 // ---------------------------------------------------------------------------
 
-// digitPairs provides two-character representations for values 00–99.
-// Used by appendInt/appendUint/appendNano to halve the number of
-// divisions. Sized at 256 (not 200) so index expressions masked with
-// &0x7F are provably in-bounds, letting the compiler eliminate bounds
-// checks.
+// digitPairs holds the two-char representation of 00–99 (256-byte
+// sized so &0x7F-masked indices are provably in-bounds).
 var digitPairs [256]byte
 
 func init() {
@@ -638,8 +602,6 @@ func init() {
 	}
 }
 
-// appendInt writes an integer into the builder's buffer. Fast path for
-// values in [0, 99].
 func (b *Builder) appendInt(x int) {
 	if x >= 0 && x < 100 {
 		if x < 10 {
@@ -657,8 +619,6 @@ func (b *Builder) appendInt(x int) {
 	b.appendUint(uint64(x))
 }
 
-// appendUint writes an unsigned integer using the digit-pair table.
-// Fast paths for values < 10, < 100, and < 1000 avoid the division loop.
 func (b *Builder) appendUint(x uint64) {
 	if x < 100 {
 		if x < 10 {
@@ -670,21 +630,21 @@ func (b *Builder) appendUint(x uint64) {
 	}
 	if x < 1000 {
 		d := x / 100
-		r := (x % 100) & 0x7F // mask forces r*2+1 < 256 at BCE
+		r := (x % 100) & 0x7F
 		b.buf = append(b.buf, byte('0'+d), digitPairs[r*2], digitPairs[r*2+1])
 		return
 	}
 	var tmp [20]byte
 	i := len(tmp)
 	for x >= 100 {
-		j := (x % 100) & 0x7F // mask forces j*2+1 < 256
+		j := (x % 100) & 0x7F
 		x /= 100
 		i -= 2
 		tmp[i] = digitPairs[j*2]
 		tmp[i+1] = digitPairs[j*2+1]
 	}
 	if x >= 10 {
-		x &= 0x7F // mask forces x*2+1 < 256
+		x &= 0x7F
 		i -= 2
 		tmp[i] = digitPairs[x*2]
 		tmp[i+1] = digitPairs[x*2+1]
@@ -695,46 +655,41 @@ func (b *Builder) appendUint(x uint64) {
 	b.buf = append(b.buf, tmp[i:]...)
 }
 
-// appendFloat64 writes a float64. NaN and ±Inf are emitted as null.
-// Integer values in (-1e18, 1e18) are emitted without a decimal point;
-// fractional values use strconv.AppendFloat with full precision.
 func (b *Builder) appendFloat64(v float64) {
 	if math.IsNaN(v) || math.IsInf(v, 0) {
 		b.buf = append(b.buf, "null"...)
 		return
 	}
-	if v == float64(int64(v)) && v < 1e18 && v > -1e18 {
-		if v < 0 {
-			b.buf = append(b.buf, '-')
-			b.appendUint(uint64(-v))
+	if v > -1e18 && v < 1e18 {
+		if iv := int64(v); float64(iv) == v {
+			if iv < 0 {
+				b.buf = append(b.buf, '-')
+				b.appendUint(absInt64AsUint64(iv))
+				return
+			}
+			b.appendUint(uint64(iv))
 			return
 		}
-		b.appendUint(uint64(v))
-		return
 	}
 	b.buf = strconv.AppendFloat(b.buf, v, 'f', -1, 64)
 }
 
-// absInt64AsUint64 returns the absolute value of v as a uint64. Handles
-// math.MinInt64 correctly: -(MinInt64+1) is MaxInt63, then +1 gives 2^63.
+// absInt64AsUint64 returns |v| as a uint64, handling math.MinInt64.
 func absInt64AsUint64(v int64) uint64 {
 	if v >= 0 {
 		return uint64(v)
 	}
-	return uint64(-(v + 1)) + 1 //nolint:gosec // intentional: avoids MinInt64 overflow
+	return uint64(-(v + 1)) + 1 //nolint:gosec // MinInt64 handling
 }
 
 // ---------------------------------------------------------------------------
 // RFC 3339 time formatting
 // ---------------------------------------------------------------------------
 
-// civilDate converts a Unix timestamp (seconds since epoch) to year,
-// month and day via the days-from-civil algorithm. Negative timestamps
-// are clamped to zero; years > 9999 are clamped to 9999.
+// civilDate converts Unix seconds to (year, month, day). Negative
+// inputs are clamped to the epoch; years > 9999 are clamped to 9999.
 func civilDate(sec int64) (year, month, day int) {
 	sec = max(sec, 0)
-	// sec ≥ 0 guarantees days ≥ 0 and z ≥ 719468, so the negative-z
-	// correction of the algorithm is unreachable and omitted.
 	days := sec / 86400
 	z := days + 719468
 	era := z / 146097
@@ -761,12 +716,31 @@ func civilDate(sec int64) (year, month, day int) {
 	return year, month, day
 }
 
-// appendTimeRFC3339 writes "YYYY-MM-DDThh:mm:ss[.nnnnnnnnn]Z" into the
-// buffer. Shared by AddTimeRFC3339Field and AddTimeRFC3339FieldKey.
 func (b *Builder) appendTimeRFC3339(t time.Time) {
 	b.buf = append(b.buf, '"')
+	b.appendCivilDateTime(t.Unix())
+	if ns := t.Nanosecond(); ns > 0 {
+		b.buf = append(b.buf, '.')
+		b.appendNano(ns)
+	}
+	b.buf = append(b.buf, 'Z', '"')
+}
 
-	unix := t.Unix()
+func (b *Builder) appendTimeRFC3339Offset(t time.Time) {
+	_, offset := t.Zone()
+	unix := t.Unix() + int64(offset)
+
+	b.buf = append(b.buf, '"')
+	b.appendCivilDateTime(unix)
+	if ns := t.Nanosecond(); ns > 0 {
+		b.buf = append(b.buf, '.')
+		b.appendNano(ns)
+	}
+	b.appendZoneOffset(offset)
+	b.buf = append(b.buf, '"')
+}
+
+func (b *Builder) appendCivilDateTime(unix int64) {
 	sec := max(unix, 0)
 	daySeconds := sec % 86400
 	hour := int(daySeconds / 3600)
@@ -775,8 +749,7 @@ func (b *Builder) appendTimeRFC3339(t time.Time) {
 
 	year, month, day := civilDate(unix)
 
-	// Mask all values to &0x7F so the compiler can prove *2+1 < 256,
-	// eliminating all bounds checks against the [256]byte digitPairs table.
+	// &0x7F masks make *2+1 < 256 provable at BCE.
 	yc := (year / 100) & 0x7F
 	yr := (year % 100) & 0x7F
 	mon := month & 0x7F
@@ -794,16 +767,27 @@ func (b *Builder) appendTimeRFC3339(t time.Time) {
 		digitPairs[mn*2], digitPairs[mn*2+1], ':',
 		digitPairs[s*2], digitPairs[s*2+1],
 	)
-
-	if ns := t.Nanosecond(); ns > 0 {
-		b.buf = append(b.buf, '.')
-		b.appendNano(ns)
-	}
-	b.buf = append(b.buf, 'Z', '"')
 }
 
-// appendNano writes a nanosecond value with trailing zeros trimmed.
-// Uses digit pairs to halve the number of divisions.
+func (b *Builder) appendZoneOffset(offset int) {
+	if offset == 0 {
+		b.buf = append(b.buf, 'Z')
+		return
+	}
+	sign := byte('+')
+	if offset < 0 {
+		sign = '-'
+		offset = -offset
+	}
+	h := (offset / 3600) & 0x7F
+	m := ((offset % 3600) / 60) & 0x7F
+	b.buf = append(b.buf,
+		sign,
+		digitPairs[h*2], digitPairs[h*2+1], ':',
+		digitPairs[m*2], digitPairs[m*2+1],
+	)
+}
+
 func (b *Builder) appendNano(v int) {
 	dotPos := len(b.buf)
 	d01 := (v / 10000000) & 0x7F
@@ -833,14 +817,11 @@ func (b *Builder) appendNano(v int) {
 // Builder pool
 // ---------------------------------------------------------------------------
 
-// poolBufferSize is the default capacity of pooled buffers.
-const poolBufferSize = 2048
+const (
+	poolBufferSize = 2048
+	poolMaxRetain  = 1 << 18 // 256 KB
+)
 
-// poolMaxRetain is the largest buffer capacity returned to the pool;
-// larger buffers are discarded to bound per-instance memory retention.
-const poolMaxRetain = 1 << 18 // 256 KB
-
-// pool is a sync.Pool for reusing Builder instances.
 var pool = sync.Pool{
 	New: func() any {
 		return &Builder{
@@ -850,8 +831,7 @@ var pool = sync.Pool{
 	},
 }
 
-// Acquire returns a Builder from the pool, ready for use. Call Release
-// when done to return it for reuse.
+// Acquire returns a Builder from the pool, ready for use.
 func Acquire() *Builder {
 	b, ok := pool.Get().(*Builder)
 	if !ok {
@@ -861,9 +841,7 @@ func Acquire() *Builder {
 	return b
 }
 
-// Release returns the Builder to the pool for reuse. The Builder must
-// not be used after calling Release. Buffers larger than 256 KB are
-// discarded to bound memory retention.
+// Release returns b to the pool. Buffers larger than 256 KB are discarded.
 func Release(b *Builder) {
 	if b == nil {
 		return
@@ -873,9 +851,7 @@ func Release(b *Builder) {
 	}
 }
 
-// WarmPool pre-allocates n Builder instances and returns them to the
-// pool. Use before entering the hot path to smooth tail latency during
-// warm-up. Values of n ≤ 0 are a no-op.
+// WarmPool pre-allocates n Builders and returns them to the pool.
 func WarmPool(n int) {
 	if n <= 0 {
 		return

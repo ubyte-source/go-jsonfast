@@ -1,6 +1,6 @@
 package jsonfast
 
-// io.Writer / io.WriterTo interface contract for Builder and BatchWriter.
+// io.Writer / io.WriterTo contract for Builder and BatchWriter.
 
 import (
 	"bytes"
@@ -8,10 +8,6 @@ import (
 	"strings"
 	"testing"
 )
-
-// ---------------------------------------------------------------------------
-// Builder implements io.Writer / io.WriterTo.
-// ---------------------------------------------------------------------------
 
 func TestBuilder_ImplementsIOWriter(_ *testing.T) {
 	var _ io.Writer = (*Builder)(nil)
@@ -58,15 +54,10 @@ func TestBuilder_WriteTo(t *testing.T) {
 	if got := sink.String(); got != `{"k":"v"}` {
 		t.Fatalf("sink content %q", got)
 	}
-	// WriteTo must not mutate the builder: Bytes() still returns the payload.
 	if string(b.Bytes()) != `{"k":"v"}` {
 		t.Fatal("WriteTo must not mutate Builder state")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// BatchWriter implements io.Writer / io.WriterTo.
-// ---------------------------------------------------------------------------
 
 func TestBatchWriter_ImplementsIOWriter(_ *testing.T) {
 	var _ io.Writer = (*BatchWriter)(nil)
@@ -75,7 +66,6 @@ func TestBatchWriter_ImplementsIOWriter(_ *testing.T) {
 
 func TestBatchWriter_Write(t *testing.T) {
 	bw := NewBatchWriter(128)
-	// Each Write is one NDJSON record with an appended newline.
 	n, err := bw.Write([]byte(`{"line":1}`))
 	if err != nil || n != len(`{"line":1}`) {
 		t.Fatalf("Write returned (%d,%v)", n, err)

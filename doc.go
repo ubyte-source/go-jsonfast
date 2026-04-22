@@ -1,56 +1,35 @@
-// Package jsonfast provides a zero-allocation JSON builder for fixed schemas.
-//
-// Designed for ultra-high-throughput pipelines where every byte and every
-// nanosecond matters. All methods operate on a reusable byte buffer;
-// steady-state operation requires zero heap allocations on the documented
-// hot paths: Builder, BatchWriter, every Add*Field method, string escape,
-// the scan package (SkipValueAt, SkipStringAt, SkipBracedAt, IterateFields,
-// IterateArray, IterateStringArray, FindField, FlattenObject,
-// IsStructuralJSON), and AddNestedStringMapField and AddFlattenedMapField
-// within their documented stack-buffer bounds.
+// Package jsonfast is a zero-allocation JSON builder and scanner for
+// fixed schemas.
 //
 // # Usage
 //
 //	b := jsonfast.Acquire()
 //	b.BeginObject()
-//	b.AddStringField("message", "hello world")
+//	b.AddStringField("message", "hello")
 //	b.AddIntField("severity", 3)
 //	b.AddTimeRFC3339Field("timestamp", time.Now())
 //	b.EndObject()
-//	data := b.Bytes() // no allocation
-//	jsonfast.Release(b) // return to pool
+//	data := b.Bytes()
+//	jsonfast.Release(b)
 //
-// # Pre-computed field keys
-//
-// For static field names known at init time, use FieldKey to eliminate
-// the per-call quoting overhead:
+// # Pre-computed keys
 //
 //	var keyMessage = jsonfast.NewFieldKey("message")
-//	b.AddStringFieldKey(keyMessage, "hello world")
+//	b.AddStringFieldKey(keyMessage, "hello")
 //
-// # Field name requirements
+// Field names passed to Add*Field are JSON-escaped on output, so any Go
+// string is safe. NewFieldKey caches the prefix verbatim and therefore
+// requires a safe-ASCII name (printable ASCII excluding '"' and '\\').
 //
-// Field names passed to Add*Field (string-keyed variants) and to
-// NewFieldKey must be safe ASCII: bytes in the printable ASCII range
-// (0x20–0x7E) excluding '"' and '\\'. They are copied verbatim into the
-// output. For dynamic or untrusted names, escape them via EscapeString
-// before use, or compose the output with AppendEscapedString /
-// AppendRawString directly.
+// # Scanning
 //
-// # Scanning and parsing
+// IterateFields, FindField, IterateArray, IterateStringArray parse JSON
+// structurally without building a DOM. The *String variants take a
+// string input and aliase its backing memory; slices/strings passed to
+// callbacks must not outlive the call (clone via strings.Clone to retain).
 //
-// IterateFields, FindField, IterateArray and related functions parse
-// JSON structurally without building an intermediate DOM. All accept
-// []byte or string inputs (the *String variants use unsafe.Slice to
-// avoid the conversion allocation). IterateStringArray and its String
-// variant pass a zero-allocation string view to the callback; the view
-// is only valid for the duration of the callback. Clone via
-// strings.Clone to retain.
+// # NDJSON
 //
-// # NDJSON batching
-//
-// BatchWriter appends complete JSON records separated by newlines.
-// It implements io.Writer (each Write adds one record) and io.WriterTo
-// (payload flush). AcquireBatchWriter / ReleaseBatchWriter manage a
-// sync.Pool; WarmBatchWriterPool pre-seeds the pool.
+// BatchWriter appends JSON records separated by '\n' and implements
+// io.Writer (one record per Write) and io.WriterTo.
 package jsonfast

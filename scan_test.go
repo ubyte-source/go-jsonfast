@@ -32,7 +32,7 @@ func TestSkipStringAt(t *testing.T) {
 		{`""`, 2, true},
 		{`"unterminated`, 0, false},
 		{`notstring`, 0, false},
-		{"\"ctrl\x01\"", 0, false}, // control char
+		{"\"ctrl\x01\"", 0, false},
 	}
 	for _, tt := range tests {
 		end, ok := SkipStringAt([]byte(tt.data), 0)
@@ -85,12 +85,29 @@ func TestSkipValueAt(t *testing.T) {
 	}{
 		{`"hello"`, 7, true},
 		{`123`, 3, true},
+		{`-42`, 3, true},
+		{`0.5`, 3, true},
+		{`1.5e10`, 6, true},
+		{`1E+5`, 4, true},
 		{`true`, 4, true},
 		{`null`, 4, true},
 		{`{"a":1}`, 7, true},
 		{`[1,2]`, 5, true},
 		{`false,next`, 5, true},
 		{``, 0, false},
+
+		{`00`, 1, true},
+		{`01`, 1, true},
+		{`truex`, 4, true},
+
+		{`.5`, 0, false},
+		{`-`, 0, false},
+		{`1.`, 0, false},
+		{`1e`, 0, false},
+		{`1e+`, 0, false},
+		{`tru`, 0, false},
+		{`fals`, 0, false},
+		{`nul`, 0, false},
 	}
 	for _, tt := range tests {
 		n, ok := SkipValueAt([]byte(tt.data), 0)
@@ -98,6 +115,328 @@ func TestSkipValueAt(t *testing.T) {
 			t.Errorf("SkipValueAt(%q,0)=(%d,%v), want (%d,%v)",
 				tt.data, n, ok, tt.n, tt.ok)
 		}
+	}
+}
+
+func TestFindField_EscapedKey(t *testing.T) {
+	data := []byte(`{"simple":1,"quoted\"name":2,"slash\\path":3,"tabbed\tkey":4}`)
+	cases := []struct {
+		key  string
+		want string
+	}{
+		{"simple", "1"},
+		{"quoted\"name", "2"},
+		{"slash\\path", "3"},
+		{"tabbed\tkey", "4"},
+	}
+	for _, tt := range cases {
+		val, ok := FindField(data, tt.key)
+		if !ok {
+			t.Errorf("FindField(%q) not found", tt.key)
+			continue
+		}
+		if string(val) != tt.want {
+			t.Errorf("FindField(%q) = %s, want %s", tt.key, val, tt.want)
+		}
+	}
+}
+
+func TestFindField_EscapedKeyUnicode(t *testing.T) {
+	data := []byte(`{"caf\u00e9":1}`)
+	val, ok := FindField(data, "café")
+	if !ok || string(val) != "1" {
+		t.Errorf("FindField(café) = %q,%v, want 1,true", val, ok)
+	}
+}
+
+func TestFindField_EscapedKeySurrogatePair(t *testing.T) {
+	data := []byte(`{"rocket \ud83d\ude80":42}`)
+	val, ok := FindField(data, "rocket 🚀")
+	if !ok || string(val) != "42" {
+		t.Errorf("FindField(rocket 🚀) = %q,%v, want 42,true", val, ok)
+	}
+}
+
+func TestFindField_EscapedKey_Mismatch(t *testing.T) {
+	data := []byte(`{"quoted\"name":1}`)
+	if _, ok := FindField(data, `quoted\"name`); ok {
+		t.Error("expected no match for key with literal backslash-quote")
+	}
+	if _, ok := FindField(data, "quoted\"na"); ok {
+		t.Error("expected no match for truncated key")
+	}
+}
+
+func TestFindField_EscapedKey_CodepointSizes(t *testing.T) {
+	cases := []struct {
+		encoded string
+		key     string
+		want    string
+	}{
+		{`{"\u0041":"one"}`, "A", `"one"`},
+		{`{"\u00e9":"two"}`, "é", `"two"`},
+		{`{"\u4e2d":"three"}`, "中", `"three"`},
+		{`{"\ud83d\ude80":"four"}`, "🚀", `"four"`},
+	}
+	for _, tt := range cases {
+		val, ok := FindField([]byte(tt.encoded), tt.key)
+		if !ok {
+			t.Errorf("%s: FindField(%q) not found", tt.encoded, tt.key)
+			continue
+		}
+		if string(val) != tt.want {
+			t.Errorf("%s: FindField(%q) = %q, want %q", tt.encoded, tt.key, val, tt.want)
+		}
+	}
+	for _, enc := range []string{
+		`{"\u00e9":1}`,
+		`{"\u4e2d":1}`,
+		`{"\ud83d\ude80":1}`,
+	} {
+		if _, ok := FindField([]byte(enc), "x"); ok {
+			t.Errorf("%s: expected no match for short key", enc)
+		}
+	}
+}
+
+func TestParseHex4_UppercaseLetters(t *testing.T) {
+	data := []byte(`{"\u00FF":1}`)
+	val, ok := FindField(data, "\u00ff")
+	if !ok || string(val) != "1" {
+		t.Errorf("uppercase hex path: got (%q,%v)", val, ok)
+	}
+}
+
+func TestSwarBroadcastPair_NonDefaultPair(t *testing.T) {
+	data := []byte("(a(b)c)")
+	end, ok := SkipBracedAt(data, 0, '(', ')')
+	if !ok || end != len(data) {
+		t.Errorf("SkipBracedAt with custom delimiters: got (%d,%v)", end, ok)
+	}
+}
+
+// Validator error paths.
+
+func TestIsStructuralJSON_ValidateValue_UnexpectedEOF(t *testing.T) {
+	if IsStructuralJSON(`{"k":   `) {
+		t.Error("expected false for truncated object value")
+	}
+}
+
+func TestIsStructuralJSON_ValidateObject_UnexpectedEOF(t *testing.T) {
+	if IsStructuralJSON(`{"k":1`) {
+		t.Error("expected false for truncated object")
+	}
+}
+
+func TestIsStructuralJSON_ValidateArray_UnexpectedEOF(t *testing.T) {
+	if IsStructuralJSON(`[1,`) {
+		t.Error("expected false for truncated array")
+	}
+}
+
+func TestIsStructuralJSON_ExpectComma_NotComma(t *testing.T) {
+	if IsStructuralJSON(`{"a":1 "b":2}`) {
+		t.Error("expected false for missing comma between fields")
+	}
+}
+
+func TestIsStructuralJSON_ExpectComma_CommaThenEOF(t *testing.T) {
+	if IsStructuralJSON(`{"a":1,`) {
+		t.Error("expected false for trailing comma at EOF")
+	}
+}
+
+func TestIsStructuralJSON_ObjectEntry_KeyNotString(t *testing.T) {
+	if IsStructuralJSON(`{ 1:2}`) {
+		t.Error("expected false for non-string object key")
+	}
+}
+
+func TestIsStructuralJSON_ObjectEntry_MalformedString(t *testing.T) {
+	data := []byte("{\"bad\x01key\":1}")
+	if IsStructuralJSON(string(data)) {
+		t.Error("expected false for key with raw control byte")
+	}
+}
+
+func TestIsStructuralJSON_ObjectEntry_MissingColon(t *testing.T) {
+	if IsStructuralJSON(`{"k" 1}`) {
+		t.Error("expected false for missing colon")
+	}
+}
+
+func TestIsStructuralJSON_SkipLiteral_Mismatch(t *testing.T) {
+	if IsStructuralJSON(`{"k":tree}`) {
+		t.Error("expected false for 'tree' literal")
+	}
+	if IsStructuralJSON(`{"k":fause}`) {
+		t.Error("expected false for 'fause' literal")
+	}
+	if IsStructuralJSON(`{"k":nunl}`) {
+		t.Error("expected false for 'nunl' literal")
+	}
+}
+
+// FindField escape-comparator error paths.
+
+func TestFindField_MatchEscape_BackslashAtEOF(t *testing.T) {
+	data := []byte(`{"a\\":1}`)
+	if _, ok := FindField(data, "b"); ok {
+		t.Error("expected no match for mismatched key against escape body")
+	}
+}
+
+func TestFindField_MatchEscape_BadShortEscape(t *testing.T) {
+	data := []byte(`{"a\zb":1}`)
+	if _, ok := FindField(data, "ab"); ok {
+		t.Error("expected no match when key contains an invalid escape")
+	}
+}
+
+func TestFindField_MatchEscape_ShortEscapeWrongByte(t *testing.T) {
+	data := []byte(`{"a\tb":1}`)
+	if _, ok := FindField(data, "a b"); ok {
+		t.Error("expected no match for tab→space mismatch")
+	}
+}
+
+func TestFindField_MatchEscape_UnicodeSurrogateFailure(t *testing.T) {
+	data := []byte(`{"\ud83d":1}`)
+	if _, ok := FindField(data, "x"); ok {
+		t.Error("expected no match for lone high surrogate in key")
+	}
+}
+
+func TestDecodeFloat64_Overflow(t *testing.T) {
+	if _, ok := DecodeFloat64([]byte("1e400")); ok {
+		t.Error("expected DecodeFloat64(1e400) to fail on overflow")
+	}
+}
+
+func TestDecodeString_AllCodepointSizes(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{`"\u0041"`, "A"},
+		{`"\u00e9"`, "é"},
+		{`"\u4e2d"`, "中"},
+		{`"\ud83d\ude80"`, "🚀"},
+	}
+	for _, tt := range cases {
+		got, ok := DecodeString([]byte(tt.in))
+		if !ok || got != tt.want {
+			t.Errorf("DecodeString(%q) = (%q,%v), want (%q,true)", tt.in, got, ok, tt.want)
+		}
+	}
+}
+
+func TestRelease_NilGuard(_ *testing.T)            { Release(nil) }
+func TestReleaseBatchWriter_NilGuard(_ *testing.T) { ReleaseBatchWriter(nil) }
+
+func TestCompareCodepoint1_Mismatch(t *testing.T) {
+	data := []byte(`{"\u0041":1}`)
+	if _, ok := FindField(data, "B"); ok {
+		t.Error("expected no match for 1-byte codepoint mismatch")
+	}
+}
+
+func TestIsStructuralJSON_ValidateArray_MidLoopEOF(t *testing.T) {
+	if IsStructuralJSON(`[1 `) {
+		t.Error("expected false for array truncated mid-loop")
+	}
+}
+
+func TestDecodeString_BackslashAtEOF(t *testing.T) {
+	raw := []byte{'"', 'a', '\\', '"'}
+	if _, ok := DecodeString(raw); ok {
+		t.Error("expected DecodeString to reject a body ending in lone backslash")
+	}
+}
+
+// In-package tests for guards unreachable via the public API.
+
+func TestPoolNewClosure(t *testing.T) {
+	v := pool.New()
+	b, ok := v.(*Builder)
+	if !ok || b == nil {
+		t.Fatal("pool.New must return a *Builder")
+	}
+	if cap(b.buf) < poolBufferSize {
+		t.Errorf("pool.New capacity %d, want >= %d", cap(b.buf), poolBufferSize)
+	}
+
+	v = batchWriterPool.New()
+	bw, ok := v.(*BatchWriter)
+	if !ok || bw == nil {
+		t.Fatal("batchWriterPool.New must return a *BatchWriter")
+	}
+	if cap(bw.buf) < batchWriterPoolBufferSize {
+		t.Errorf("batchWriterPool.New capacity %d, want >= %d", cap(bw.buf), batchWriterPoolBufferSize)
+	}
+}
+
+func TestSkipScalar_EmptyGuard(t *testing.T) {
+	end, ok := skipScalar(nil, 0)
+	if ok || end != 0 {
+		t.Errorf("skipScalar(nil,0) = (%d,%v), want (0,false)", end, ok)
+	}
+}
+
+func TestBytesToString_EmptyGuard(t *testing.T) {
+	if s := bytesToString(nil); s != "" {
+		t.Errorf("bytesToString(nil) = %q, want empty", s)
+	}
+	if s := bytesToString([]byte{}); s != "" {
+		t.Errorf("bytesToString(empty) = %q, want empty", s)
+	}
+}
+
+func TestMatchEscape_BackslashAtEOF(t *testing.T) {
+	_, _, ok := matchEscape([]byte{'\\'}, 0, "anything", 0)
+	if ok {
+		t.Error("matchEscape must reject a lone trailing backslash")
+	}
+}
+
+func TestAcquire_PoolWithBadType(t *testing.T) {
+	for i := 0; i < 64; i++ {
+		pool.Put(&struct{ x int }{x: i})
+	}
+	seen := make([]*Builder, 0, 64)
+	for i := 0; i < 64; i++ {
+		b := Acquire()
+		if b == nil {
+			t.Fatal("Acquire must not return nil")
+		}
+		if cap(b.buf) < poolBufferSize {
+			t.Errorf("fallback capacity %d, want >= %d", cap(b.buf), poolBufferSize)
+		}
+		seen = append(seen, b)
+	}
+	for _, b := range seen {
+		Release(b)
+	}
+}
+
+func TestAcquireBatchWriter_PoolWithBadType(t *testing.T) {
+	for i := 0; i < 64; i++ {
+		batchWriterPool.Put(&struct{ x int }{x: i})
+	}
+	seen := make([]*BatchWriter, 0, 64)
+	for i := 0; i < 64; i++ {
+		bw := AcquireBatchWriter()
+		if bw == nil {
+			t.Fatal("AcquireBatchWriter must not return nil")
+		}
+		if cap(bw.buf) < batchWriterPoolBufferSize {
+			t.Errorf("fallback capacity %d, want >= %d", cap(bw.buf), batchWriterPoolBufferSize)
+		}
+		seen = append(seen, bw)
+	}
+	for _, bw := range seen {
+		ReleaseBatchWriter(bw)
 	}
 }
 
@@ -164,7 +503,7 @@ func TestIterateFields_CallbackFalse(t *testing.T) {
 	count := 0
 	ok := IterateFields(data, func(_, _ []byte) bool {
 		count++
-		return false // stop after first
+		return false
 	})
 	if ok {
 		t.Error("expected false when callback returns false")
@@ -313,7 +652,6 @@ func TestFlattenObject_MultipleSDIDs(t *testing.T) {
 	b.EndObject()
 
 	got := string(b.Bytes())
-	// Keys appear in iteration order (object order preserved)
 	want := `{"a":"1","b":"2","c":"3"}`
 	if got != want {
 		t.Errorf("got  %s\nwant %s", got, want)
@@ -360,7 +698,6 @@ func TestFlattenObject_Malformed(t *testing.T) {
 }
 
 func TestFlattenObject_DepthLimit(t *testing.T) {
-	// Build a JSON object nested 100 levels deep — exceeds maxFlattenDepth (64).
 	nested := make([]byte, 0, 606)
 	for range 100 {
 		nested = append(nested, `{"k":`...)
@@ -377,7 +714,6 @@ func TestFlattenObject_DepthLimit(t *testing.T) {
 }
 
 func TestFlattenObject_WithinDepthLimit(t *testing.T) {
-	// Build a JSON object nested 10 levels deep — within limit.
 	nested := make([]byte, 0, 64)
 	for range 10 {
 		nested = append(nested, `{"k":`...)
@@ -474,12 +810,7 @@ func TestIterateFieldsString_Invalid(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// SkipStringAt edge cases
-// ---------------------------------------------------------------------------
-
 func TestSkipStringAt_ControlChar(t *testing.T) {
-	// Raw control char inside string must be rejected per RFC 8259.
 	data := []byte{'"', 0x01, '"'}
 	_, ok := SkipStringAt(data, 0)
 	if ok {
@@ -519,7 +850,6 @@ func TestSkipStringAt_Empty(t *testing.T) {
 }
 
 func TestSkipStringAt_LongStringWithEscape(t *testing.T) {
-	// String long enough to trigger SWAR, with escape near the end.
 	data := []byte(`"` + "aaaaaaaaaaaaaaaaaaa\\nbb" + `"`)
 	end, ok := SkipStringAt(data, 0)
 	if !ok || end != len(data) {
@@ -528,13 +858,12 @@ func TestSkipStringAt_LongStringWithEscape(t *testing.T) {
 }
 
 func TestSkipStringAt_LongStringWithControlChar(t *testing.T) {
-	// 20 bytes of 'a' then a control char — SWAR should skip past safe bytes.
 	buf := make([]byte, 23)
 	buf[0] = '"'
 	for i := 1; i <= 20; i++ {
 		buf[i] = 'a'
 	}
-	buf[21] = 0x05 // control char
+	buf[21] = 0x05
 	buf[22] = '"'
 	_, ok := SkipStringAt(buf, 0)
 	if ok {
@@ -543,7 +872,6 @@ func TestSkipStringAt_LongStringWithControlChar(t *testing.T) {
 }
 
 func TestSkipStringAt_VeryLongSafe(t *testing.T) {
-	// 64 safe bytes — exercises the SWAR 8-byte stride across multiple words.
 	buf := make([]byte, 66)
 	buf[0] = '"'
 	for i := 1; i <= 64; i++ {
@@ -557,7 +885,6 @@ func TestSkipStringAt_VeryLongSafe(t *testing.T) {
 }
 
 func TestSkipStringAt_EscapeIn2ndWord(t *testing.T) {
-	// 8 safe bytes then a quote in the 9th byte (second SWAR word).
 	s := `"12345678"`
 	end, ok := SkipStringAt([]byte(s), 0)
 	if !ok || end != len(s) {
@@ -566,9 +893,6 @@ func TestSkipStringAt_EscapeIn2ndWord(t *testing.T) {
 }
 
 func TestSkipStringAt_QuoteIn2ndSWARWord(t *testing.T) {
-	// 8 safe bytes fill the first SWAR word; the closing quote lands in
-	// the second SWAR word at position 9. Padding ensures the SWAR loop
-	// has at least one full word past the quote to consider.
 	buf := make([]byte, 17)
 	buf[0] = '"'
 	for i := 1; i <= 8; i++ {
@@ -583,10 +907,6 @@ func TestSkipStringAt_QuoteIn2ndSWARWord(t *testing.T) {
 		t.Errorf("got end=%d ok=%v, want end=10 ok=true", end, ok)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// flattenObject edge cases (extended)
-// ---------------------------------------------------------------------------
 
 func TestFlattenObject_MalformedCases(t *testing.T) {
 	cases := []struct {
@@ -614,7 +934,6 @@ func TestFlattenObject_MalformedCases(t *testing.T) {
 }
 
 func TestFlattenObject_NestedMalformed(t *testing.T) {
-	// Inner object is malformed.
 	b := New(128)
 	b.BeginObject()
 	ok := FlattenObject(b, []byte(`{"k":{bad}}`))
@@ -623,12 +942,7 @@ func TestFlattenObject_NestedMalformed(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// SkipBracedAt edge cases
-// ---------------------------------------------------------------------------
-
 func TestSkipBracedAt_UnterminatedString(t *testing.T) {
-	// Brace containing an unterminated string.
 	data := []byte(`{"key":"unterminated`)
 	_, ok := SkipBracedAt(data, 0, '{', '}')
 	if ok {
@@ -651,10 +965,6 @@ func TestSkipBracedAt_UnterminatedBrace(t *testing.T) {
 		t.Error("expected false for unterminated brace")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// IterateArray tests
-// ---------------------------------------------------------------------------
 
 func TestIterateArray_Strings(t *testing.T) {
 	data := []byte(`["alpha","beta","gamma"]`)
@@ -789,10 +1099,6 @@ func TestIterateArray_SingleElement(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// IterateStringArray tests
-// ---------------------------------------------------------------------------
-
 func TestIterateStringArray_Basic(t *testing.T) {
 	data := []byte(`["hello","world"]`)
 	var got []string
@@ -847,7 +1153,6 @@ func TestIterateStringArray_SingleID(t *testing.T) {
 }
 
 func TestIterateStringArray_EmptyString(t *testing.T) {
-	// len(elem) == 2 is the "" edge case. The callback receives "".
 	data := []byte(`["",""]`)
 	var got []string
 	ok := IterateStringArray(data, func(val string) bool {
@@ -882,10 +1187,6 @@ func TestIterateStringArray_ManyIDs(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Array iteration benchmarks
-// ---------------------------------------------------------------------------
-
 func BenchmarkIterateArray(b *testing.B) {
 	data := []byte(`[1,"hello",true,null,{"k":"v"},[1,2,3]]`)
 	b.ReportAllocs()
@@ -907,7 +1208,6 @@ func BenchmarkIterateArray_Strings10(b *testing.B) {
 }
 
 func BenchmarkIterateArray_Strings100(b *testing.B) {
-	// Build a 100-element string array
 	buf := []byte{'['}
 	for i := range 100 {
 		if i > 0 {
@@ -935,10 +1235,6 @@ func BenchmarkIterateArray_NestedObjects(b *testing.B) {
 		IterateArray(data, func(_ []byte) bool { return true })
 	}
 }
-
-// ---------------------------------------------------------------------------
-// IterateArrayString / IterateStringArrayString tests
-// ---------------------------------------------------------------------------
 
 func TestIterateArrayString_Basic(t *testing.T) {
 	s := `[1,"hello",true]`
@@ -997,5 +1293,190 @@ func TestIterateStringArrayString_Empty(t *testing.T) {
 	}
 	if !IterateStringArrayString("[]", func(_ string) bool { return true }) {
 		t.Fatal("expected ok for empty array")
+	}
+}
+
+func TestDecodeString(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+		ok   bool
+	}{
+		{`"hello"`, "hello", true},
+		{`""`, "", true},
+		{`"a\"b"`, `a"b`, true},
+		{`"a\\b"`, `a\b`, true},
+		{`"a\/b"`, "a/b", true},
+		{`"a\nb"`, "a\nb", true},
+		{`"a\tb"`, "a\tb", true},
+		{`"a\rb"`, "a\rb", true},
+		{`"a\bb"`, "a\bb", true},
+		{`"a\fb"`, "a\fb", true},
+		{`"\u00e9"`, "é", true},
+		{`"\ud83d\ude80"`, "🚀", true},
+		{`no quotes`, "", false},
+		{`"`, "", false},
+		{`"unterminated`, "", false},
+		{`"bad\z"`, "", false},
+		{`"bad\u"`, "", false},
+		{`"bad\uZZZZ"`, "", false},
+		{`"\ud83d"`, "", false},
+		{`"\udc00"`, "", false},
+		{`"\ud83d\u0041"`, "", false},
+	}
+	for _, tt := range cases {
+		got, ok := DecodeString([]byte(tt.in))
+		if ok != tt.ok || got != tt.want {
+			t.Errorf("DecodeString(%q) = (%q,%v), want (%q,%v)", tt.in, got, ok, tt.want, tt.ok)
+		}
+	}
+}
+
+func TestDecodeBool(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+		ok   bool
+	}{
+		{"true", true, true},
+		{"false", false, true},
+		{"True", false, false},
+		{"FALSE", false, false},
+		{"tru", false, false},
+		{"falsex", false, false},
+		{"", false, false},
+	}
+	for _, tt := range cases {
+		got, ok := DecodeBool([]byte(tt.in))
+		if ok != tt.ok || got != tt.want {
+			t.Errorf("DecodeBool(%q) = (%v,%v), want (%v,%v)", tt.in, got, ok, tt.want, tt.ok)
+		}
+	}
+}
+
+func TestDecodeInt64(t *testing.T) {
+	cases := []struct {
+		in   string
+		want int64
+		ok   bool
+	}{
+		{"0", 0, true},
+		{"-0", 0, true},
+		{"42", 42, true},
+		{"-42", -42, true},
+		{"9223372036854775807", 9223372036854775807, true},
+		{"-9223372036854775808", -9223372036854775808, true},
+		{"", 0, false},
+		{"+1", 0, false},
+		{"01", 0, false},
+		{"00", 0, false},
+		{"1.5", 0, false},
+		{"1e5", 0, false},
+		{"-", 0, false},
+		{"9223372036854775808", 0, false},
+		{"-9223372036854775809", 0, false},
+	}
+	for _, tt := range cases {
+		got, ok := DecodeInt64([]byte(tt.in))
+		if ok != tt.ok || got != tt.want {
+			t.Errorf("DecodeInt64(%q) = (%d,%v), want (%d,%v)", tt.in, got, ok, tt.want, tt.ok)
+		}
+	}
+}
+
+func TestDecodeUint64(t *testing.T) {
+	cases := []struct {
+		in   string
+		want uint64
+		ok   bool
+	}{
+		{"0", 0, true},
+		{"42", 42, true},
+		{"18446744073709551615", 18446744073709551615, true},
+		{"-1", 0, false},
+		{"+1", 0, false},
+		{"01", 0, false},
+		{"1.5", 0, false},
+		{"18446744073709551616", 0, false},
+		{"", 0, false},
+	}
+	for _, tt := range cases {
+		got, ok := DecodeUint64([]byte(tt.in))
+		if ok != tt.ok || got != tt.want {
+			t.Errorf("DecodeUint64(%q) = (%d,%v), want (%d,%v)", tt.in, got, ok, tt.want, tt.ok)
+		}
+	}
+}
+
+func TestDecodeFloat64(t *testing.T) {
+	cases := []struct {
+		in   string
+		want float64
+		ok   bool
+	}{
+		{"0", 0, true},
+		{"3.14", 3.14, true},
+		{"-2.5", -2.5, true},
+		{"1e10", 1e10, true},
+		{"1.5E-3", 1.5e-3, true},
+		{"", 0, false},
+		{"NaN", 0, false},
+		{"Inf", 0, false},
+		{"+1", 0, false},
+		{".5", 0, false},
+		{"1.", 0, false},
+		{"1e", 0, false},
+	}
+	for _, tt := range cases {
+		got, ok := DecodeFloat64([]byte(tt.in))
+		if ok != tt.ok || got != tt.want {
+			t.Errorf("DecodeFloat64(%q) = (%g,%v), want (%g,%v)", tt.in, got, ok, tt.want, tt.ok)
+		}
+	}
+}
+
+var decodersSample = []byte(`{"name":"Alice","age":30,"weight":55.5,"active":true,"label":"caf\u00e9"}`)
+
+func findOrFail(t *testing.T, data []byte, key string) []byte {
+	t.Helper()
+	raw, ok := FindField(data, key)
+	if !ok {
+		t.Fatalf("FindField(%q): not found", key)
+	}
+	return raw
+}
+
+func TestDecoders_WithFindField_String(t *testing.T) {
+	raw := findOrFail(t, decodersSample, "name")
+	if s, ok := DecodeString(raw); !ok || s != "Alice" {
+		t.Errorf("DecodeString(name) = (%q,%v)", s, ok)
+	}
+}
+
+func TestDecoders_WithFindField_Int64(t *testing.T) {
+	raw := findOrFail(t, decodersSample, "age")
+	if v, ok := DecodeInt64(raw); !ok || v != 30 {
+		t.Errorf("DecodeInt64(age) = (%d,%v)", v, ok)
+	}
+}
+
+func TestDecoders_WithFindField_Float64(t *testing.T) {
+	raw := findOrFail(t, decodersSample, "weight")
+	if v, ok := DecodeFloat64(raw); !ok || v != 55.5 {
+		t.Errorf("DecodeFloat64(weight) = (%g,%v)", v, ok)
+	}
+}
+
+func TestDecoders_WithFindField_Bool(t *testing.T) {
+	raw := findOrFail(t, decodersSample, "active")
+	if v, ok := DecodeBool(raw); !ok || !v {
+		t.Errorf("DecodeBool(active) = (%v,%v)", v, ok)
+	}
+}
+
+func TestDecoders_WithFindField_StringEscape(t *testing.T) {
+	raw := findOrFail(t, decodersSample, "label")
+	if s, ok := DecodeString(raw); !ok || s != "café" {
+		t.Errorf("DecodeString(label) = (%q,%v)", s, ok)
 	}
 }

@@ -6,7 +6,6 @@ import (
 )
 
 func TestSwarSpecialEscape_SafeASCII(t *testing.T) {
-	// 8 bytes of safe ASCII: no control, no quote, no backslash, no high-bit.
 	w := binary.LittleEndian.Uint64([]byte("abcdefgh"))
 	if swarSpecialEscape(w) != 0 {
 		t.Error("expected 0 for safe ASCII")
@@ -29,7 +28,7 @@ func TestSwarSpecialEscape_Backslash(t *testing.T) {
 
 func TestSwarSpecialEscape_ControlChar(t *testing.T) {
 	buf := []byte("abcdefgh")
-	buf[3] = 0x01 // control char
+	buf[3] = 0x01
 	w := binary.LittleEndian.Uint64(buf)
 	if swarSpecialEscape(w) == 0 {
 		t.Error("expected non-zero for control char")
@@ -38,7 +37,7 @@ func TestSwarSpecialEscape_ControlChar(t *testing.T) {
 
 func TestSwarSpecialEscape_HighBit(t *testing.T) {
 	buf := []byte("abcdefgh")
-	buf[5] = 0x80 // non-ASCII
+	buf[5] = 0x80
 	w := binary.LittleEndian.Uint64(buf)
 	if swarSpecialEscape(w) == 0 {
 		t.Error("expected non-zero for high-bit byte")
@@ -46,7 +45,6 @@ func TestSwarSpecialEscape_HighBit(t *testing.T) {
 }
 
 func TestSwarSpecialEscape_AllZeros(t *testing.T) {
-	// All NUL bytes → control chars.
 	if swarSpecialEscape(0) == 0 {
 		t.Error("expected non-zero for all-NUL word")
 	}
@@ -83,7 +81,6 @@ func TestSwarSpecialSkip_ControlChar(t *testing.T) {
 }
 
 func TestSwarSpecialSkip_HighBit_Allowed(t *testing.T) {
-	// Unlike swarSpecialEscape, high-bit bytes must NOT trigger.
 	buf := []byte("abcdefgh")
 	buf[5] = 0x80
 	w := binary.LittleEndian.Uint64(buf)
@@ -93,7 +90,6 @@ func TestSwarSpecialSkip_HighBit_Allowed(t *testing.T) {
 }
 
 func TestSwarSpecialSkip_HighBit_AllHigh(t *testing.T) {
-	// All bytes 0x80 — valid UTF-8 continuation territory.
 	w := uint64(0x8080808080808080)
 	if swarSpecialSkip(w) != 0 {
 		t.Error("expected 0 for all-0x80 word in skip mode")
@@ -101,7 +97,6 @@ func TestSwarSpecialSkip_HighBit_AllHigh(t *testing.T) {
 }
 
 func TestSwarSpecialEscape_Space(t *testing.T) {
-	// Space (0x20) is the first non-control char — should NOT trigger.
 	w := binary.LittleEndian.Uint64([]byte("abc efgh"))
 	if swarSpecialEscape(w) != 0 {
 		t.Error("expected 0 for embedded space")
@@ -109,7 +104,6 @@ func TestSwarSpecialEscape_Space(t *testing.T) {
 }
 
 func TestSwarSpecialEscape_Byte0x1F(t *testing.T) {
-	// 0x1F is the last control char — should trigger.
 	buf := []byte("abcdefgh")
 	buf[2] = 0x1F
 	w := binary.LittleEndian.Uint64(buf)
@@ -154,11 +148,10 @@ func TestSwarConstants(t *testing.T) {
 }
 
 func TestSwarEscapeVsSkip_Difference(t *testing.T) {
-	// The ONLY difference: high-bit bytes trigger Escape but not Skip.
-	for b := byte(0x80); b != 0; b++ { // 0x80..0xFF
+	for b := byte(0x80); b != 0; b++ {
 		var buf [8]byte
 		for i := range buf {
-			buf[i] = 'a' // safe baseline
+			buf[i] = 'a'
 		}
 		buf[0] = b
 		w := binary.LittleEndian.Uint64(buf[:])
@@ -174,7 +167,6 @@ func TestSwarEscapeVsSkip_Difference(t *testing.T) {
 }
 
 func TestSwarEscapeVsSkip_Agreement(t *testing.T) {
-	// For ASCII bytes 0x00..0x7F, both must agree.
 	for b := byte(0); b < 0x80; b++ {
 		var buf [8]byte
 		for i := range buf {

@@ -1,13 +1,10 @@
 package jsonfast
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
-
-// ---------------------------------------------------------------------------
-// FlattenMap
-// ---------------------------------------------------------------------------
 
 func TestFlattenMap(t *testing.T) {
 	tests := []struct {
@@ -74,10 +71,6 @@ func TestFlattenMap_NilInput(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// AddFlattenedMapField
-// ---------------------------------------------------------------------------
-
 func TestAddFlattenedMapField(t *testing.T) {
 	b := New(512)
 	b.BeginObject()
@@ -100,7 +93,6 @@ func TestAddFlattenedMapField_Empty(t *testing.T) {
 }
 
 func TestFlattenMap_ManyEntries(t *testing.T) {
-	// Exercise FlattenMap with 20 entries across 4 outer keys.
 	m := map[string]map[string]string{
 		"a": {}, "b": {}, "c": {}, "d": {},
 	}
@@ -116,7 +108,6 @@ func TestFlattenMap_ManyEntries(t *testing.T) {
 }
 
 func TestAddFlattenedMapField_ManyEntries(t *testing.T) {
-	// >16 total entries to trigger the heap-allocated entries path.
 	m := map[string]map[string]string{
 		"a": {}, "b": {}, "c": {}, "d": {},
 	}
@@ -130,7 +121,6 @@ func TestAddFlattenedMapField_ManyEntries(t *testing.T) {
 	b.AddFlattenedMapField(m)
 	b.EndObject()
 	got := string(b.Bytes())
-	// Should have 20 fields.
 	count := strings.Count(got, `:"v"`)
 	if count != 20 {
 		t.Errorf("expected 20 fields, got %d in %s", count, got)
@@ -161,14 +151,20 @@ func TestAddFlattenedMapField_SpecialCharsInKey(t *testing.T) {
 	b := New(256)
 	b.BeginObject()
 	m := map[string]map[string]string{
-		"key with spaces": {"sub\"key": "value"},
+		"key\"with\\special\nchars": {"inner\tkey": "val"},
 	}
 	b.AddFlattenedMapField(m)
 	b.EndObject()
 
 	result := string(b.Bytes())
-	assertContains(t, result, "key with spaces")
-	assertContains(t, result, "sub")
+	var parsed map[string]string
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("invalid JSON: %v\ngot: %s", err, result)
+	}
+	want := "key\"with\\special\nchars.inner\tkey"
+	if parsed[want] != "val" {
+		t.Errorf("expected decoded key %q → val, got %v", want, parsed)
+	}
 }
 
 func TestAddFlattenedMapField_MultipleInnerKeys(t *testing.T) {
@@ -189,10 +185,6 @@ func TestAddFlattenedMapField_MultipleInnerKeys(t *testing.T) {
 	assertContains(t, result, `"event.src":"10.0.0.1"`)
 	assertContains(t, result, `"event.type":"alert"`)
 }
-
-// ---------------------------------------------------------------------------
-// Benchmarks
-// ---------------------------------------------------------------------------
 
 func BenchmarkFlattenMap(b *testing.B) {
 	m := map[string]map[string]string{

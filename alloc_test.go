@@ -5,13 +5,11 @@ import (
 	"time"
 )
 
-// Zero-allocation CI gate: each test asserts a documented hot path
-// produces zero heap allocations per call via testing.AllocsPerRun.
+// Zero-allocation CI gate: each test asserts that a hot path produces
+// zero heap allocations per call.
 
 const allocIterations = 100
 
-// assertZeroAlloc fails the test if f allocates on the steady-state path.
-// The warm-up primes pool state so growth is not counted.
 func assertZeroAlloc(t *testing.T, name string, f func()) {
 	t.Helper()
 	for range 4 {
@@ -63,8 +61,37 @@ func TestZeroAlloc_Builder_FullSyslog_FieldKey(t *testing.T) {
 	})
 }
 
+func TestZeroAlloc_StringArrayField(t *testing.T) {
+	builder := New(512)
+	key := NewFieldKey("ids")
+	vals := []string{"id-1", "id-2", "id-3", "id-4", "id-5"}
+	assertZeroAlloc(t, "StringArrayField", func() {
+		builder.Reset()
+		builder.BeginObject()
+		builder.AddStringArrayField("items", vals)
+		builder.AddStringArrayFieldKey(key, vals)
+		builder.EndObject()
+	})
+}
+
+func TestZeroAlloc_NestedObjectField(t *testing.T) {
+	builder := New(512)
+	key := NewFieldKey("sd")
+	assertZeroAlloc(t, "NestedObjectField", func() {
+		builder.Reset()
+		builder.BeginObject()
+		builder.BeginObjectFieldKey(key)
+		builder.AddStringField("a", "1")
+		builder.AddStringField("b", "2")
+		builder.EndObjectField()
+		builder.BeginObjectField("inner")
+		builder.AddIntField("x", 42)
+		builder.EndObjectField()
+		builder.EndObject()
+	})
+}
+
 func TestZeroAlloc_AcquireRelease(t *testing.T) {
-	// Warm the pool so New is not called inside AcquireRelease.
 	WarmPool(4)
 	assertZeroAlloc(t, "AcquireRelease", func() {
 		b := Acquire()
@@ -162,8 +189,7 @@ func TestZeroAlloc_Scan_IsStructuralJSON(t *testing.T) {
 func TestZeroAlloc_EscapeString_NoEscape(t *testing.T) {
 	s := "hello-world-no-special-chars-here"
 	assertZeroAlloc(t, "EscapeString/pure-ASCII", func() {
-		out := EscapeString(s)
-		_ = out
+		_ = EscapeString(s)
 	})
 }
 
@@ -201,7 +227,6 @@ func TestZeroAlloc_Builder_Write(t *testing.T) {
 }
 
 func TestZeroAlloc_Float64_NaN_Inf(t *testing.T) {
-	// Ensure the NaN/Inf→null path is allocation-free.
 	builder := New(64)
 	assertZeroAlloc(t, "Float64.NaN_Inf", func() {
 		builder.Reset()
