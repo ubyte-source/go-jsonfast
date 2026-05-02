@@ -176,25 +176,37 @@ See the [package documentation](https://pkg.go.dev/github.com/ubyte-source/go-js
 | `AddBoolField(name, v bool)` | `"name":true` / `"name":false` |
 | `AddNullField(name)` | `"name":null` |
 | `AddTimeRFC3339Field(name, t time.Time)` | `"name":"YYYY-MM-DDThh:mm:ss[.fffffffff]Z"` |
-| `AddRawJSONField(name, rawJSON []byte)` | `"name":<raw>` — no escaping |
+| `AddRawJSONField(name, rawJSON []byte)` | `"name":<raw>` — no escaping; `rawJSON` must already be valid JSON (caller verifies). |
 | `AddNestedStringMapField(name, m)` | `"name":{outer:{inner:"v",...},...}`, sorted |
-| `AddStringMapObject(m, rawJSONKey)` | writes a `map[string]string` as object |
+| `AddStringMapObject(m, rawJSONKey)` | Writes `m` as a standalone JSON object (no field name), keys sorted. The entry whose key equals `rawJSONKey` is emitted as raw JSON when `IsStructuralJSON` accepts the value, otherwise as a regular string field. |
+| `AddStringMapObjectField(name, m, rawJSONKey)` | `"name":{...}` form of `AddStringMapObject`. |
+| `AddTimeRFC3339OffsetField(name, t time.Time)` | `"name":"YYYY-MM-DDThh:mm:ss[.fffffffff]<±HH:MM\|Z>"` — preserves `t`'s offset. |
 | `AddFlattenedMapField(m)` | flat `"outer.inner":"value"` fields, sorted |
 
-Field name requirement: safe ASCII (no escaping required). For untrusted names,
-escape via `EscapeString` or compose via `AppendEscapedString` + `AppendRawString`.
+Field name requirement: safe ASCII (no escaping required). For untrusted
+names, escape via `EscapeString` or compose via `AppendEscapedString` +
+`AppendRawString`.
+
+`AddRawJSONField` and `AppendRaw` do not inspect their payload. For
+untrusted bytes, validate first with `IsStructuralJSON` (or
+`encoding/json.Valid`).
 
 ### Pre-computed FieldKey methods
+
+Each entry has the same output as the corresponding string-keyed
+`Add*Field` method; the only difference is that the `,"name":` prefix is
+emitted from the cached `FieldKey` instead of being escaped per call.
 
 | Function | Notes |
 |----------|-------|
 | `type FieldKey string` | Typed string holding `,"name":` |
 | `NewFieldKey(name string) FieldKey` | Factory; call at init time |
-| `AddStringFieldKey` / `AddIntFieldKey` / `AddInt64FieldKey` / `AddUint64FieldKey` | |
-| `AddBoolFieldKey` / `AddFloat64FieldKey` / `AddNullFieldKey` | |
-| `AddStringArrayFieldKey` / `BeginObjectFieldKey` | |
-| `AddTimeRFC3339FieldKey` | |
-| `AddRawJSONFieldKey` | |
+| `AddStringFieldKey` / `AddStringArrayFieldKey` | String / string-array |
+| `AddIntFieldKey` / `AddInt64FieldKey` / `AddUint64FieldKey` | Integers |
+| `AddFloat64FieldKey` / `AddBoolFieldKey` / `AddNullFieldKey` | Other scalars |
+| `AddRawJSONFieldKey` | Raw JSON value (caller verifies validity) |
+| `AddTimeRFC3339FieldKey` / `AddTimeRFC3339OffsetFieldKey` | UTC / offset-preserving |
+| `BeginObjectFieldKey` | Open a nested object; pair with `EndObjectField` |
 
 ### Raw appenders
 
@@ -226,6 +238,27 @@ escape via `EscapeString` or compose via `AppendEscapedString` + `AppendRawStrin
 data. The view is only valid for the duration of the callback — clone via
 `strings.Clone` to retain.
 
+### Scalar decoders
+
+The scanners surface raw JSON bytes; these helpers convert one such
+slice into the corresponding Go value. They are typically composed with
+`FindField` or with the per-field callback of `IterateFields`.
+
+| Function | Description |
+|----------|-------------|
+| `DecodeString(raw []byte) (string, bool)` | Decodes a quoted JSON string, resolving escapes and surrogate pairs. |
+| `DecodeBool(raw []byte) (value, ok bool)` | Decodes the literal `true` / `false`. |
+| `DecodeInt64(raw []byte) (int64, bool)` | Strict integer: rejects fractional, exponent, leading `+`, and leading-zero forms (only `0` and `-0` accepted). |
+| `DecodeUint64(raw []byte) (uint64, bool)` | Same rules as `DecodeInt64`, plus rejects negative input. |
+| `DecodeFloat64(raw []byte) (float64, bool)` | Any RFC 8259 number; overflow returns `ok=false`. |
+
+```go
+v, ok := jsonfast.FindField(data, "severity")
+if !ok { return errMissing }
+sev, ok := jsonfast.DecodeInt64(v)
+if !ok { return errBadType }
+```
+
 ### BatchWriter (NDJSON)
 
 | Function | Description |
@@ -243,6 +276,26 @@ data. The view is only valid for the duration of the callback — clone via
 | Function | Description |
 |----------|-------------|
 | `FlattenMap(m, dst map[string]string) map[string]string` | Materialise a flat map; pass `dst` to avoid re-allocating. |
+
+### Out-of-scope
+
+This package deliberately omits:
+
+* a generic JSON-to-DOM decoder (no `map[string]any` / `[]any` decoder);
+* a generic `any`-encoder for the Builder;
+* a whitespace compaction helper.
+
+Fixed-schema callers should use `Iterate*`/`FindField` and the typed
+`Add*Field` methods directly. Callers who legitimately need to handle
+arbitrary dynamic data should reach for `encoding/json`:
+
+```go
+data, err := json.Marshal(v) // arbitrary `any`
+if err != nil { … }
+b.AppendRaw(data)            // splice straight into the Builder
+```
+
+For whitespace compaction use the standard library's `encoding/json.Compact`.
 
 ## Benchmarks
 
