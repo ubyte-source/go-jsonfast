@@ -17,6 +17,4 @@ updates:
     groups:
       actions:
         patterns: ["*"]
-    ignore:
-      - dependency-name: "actions/checkout"
-        versions: ["6.x"]
+
