@@ -76,18 +76,50 @@ func FuzzFindField(f *testing.F) {
 		if ok && len(val) == 0 {
 			t.Errorf("FindField returned ok with empty value")
 		}
-		var m map[string]json.RawMessage
-		if json.Unmarshal(data, &m) != nil {
-			return
-		}
-		want, exists := m[key]
-		if exists != ok {
+		// FindField is documented as first-match; encoding/json's map keeps the
+		// last duplicate. Build a first-match oracle by streaming tokens.
+		want, exists, decodeOK := firstMatchOracle(data, key)
+		if !decodeOK || exists != ok {
 			return
 		}
 		if ok && !bytes.Equal(bytes.TrimSpace(want), bytes.TrimSpace(val)) {
 			t.Errorf("FindField(%q) = %q, want %q", key, val, want)
 		}
 	})
+}
+
+// firstMatchOracle returns the raw value of the first top-level field matching
+// key in a JSON object, matching FindField's first-wins semantics. The third
+// return reports whether the input was well-formed enough to decode.
+func firstMatchOracle(data []byte, key string) (raw []byte, found, ok bool) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, false, false
+	}
+	d, isDelim := tok.(json.Delim)
+	if !isDelim || d != '{' {
+		return nil, false, false
+	}
+	for dec.More() {
+		keyTok, err := dec.Token()
+		if err != nil {
+			return nil, false, false
+		}
+		k, isStr := keyTok.(string)
+		if !isStr {
+			return nil, false, false
+		}
+		var v json.RawMessage
+		if err := dec.Decode(&v); err != nil {
+			return nil, false, false
+		}
+		if !found && k == key {
+			raw = v
+			found = true
+		}
+	}
+	return raw, found, true
 }
 
 func FuzzIsStructuralJSON(f *testing.F) {
