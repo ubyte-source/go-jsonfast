@@ -174,8 +174,8 @@ func TestBatchWriter_Count(t *testing.T) {
 	if bw.Count() != 0 {
 		t.Fatalf("expected 0, got %d", bw.Count())
 	}
-	bw.Append([]byte(`{"a":1}`))
-	bw.AppendString(`{"b":2}`)
+	bw.Append([]byte(testJSONObjA1))
+	bw.AppendString(testJSONObjB2)
 	if bw.Count() != 2 {
 		t.Errorf("expected 2, got %d", bw.Count())
 	}

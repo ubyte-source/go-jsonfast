@@ -26,7 +26,7 @@ func TestSkipStringAt(t *testing.T) {
 		n    int
 		ok   bool
 	}{
-		{`"hello"`, 7, true},
+		{testJSONHelloLit, 7, true},
 		{`"he\"lo"`, 8, true},
 		{`"a\\b"`, 6, true},
 		{`""`, 2, true},
@@ -83,15 +83,15 @@ func TestSkipValueAt(t *testing.T) {
 		n    int
 		ok   bool
 	}{
-		{`"hello"`, 7, true},
+		{testJSONHelloLit, 7, true},
 		{`123`, 3, true},
 		{`-42`, 3, true},
 		{`0.5`, 3, true},
 		{`1.5e10`, 6, true},
 		{`1E+5`, 4, true},
-		{`true`, 4, true},
+		{litTrue, 4, true},
 		{`null`, 4, true},
-		{`{"a":1}`, 7, true},
+		{testJSONObjA1, 7, true},
 		{`[1,2]`, 5, true},
 		{`false,next`, 5, true},
 		{``, 0, false},
@@ -401,11 +401,11 @@ func TestMatchEscape_BackslashAtEOF(t *testing.T) {
 }
 
 func TestAcquire_PoolWithBadType(t *testing.T) {
-	for i := 0; i < 64; i++ {
+	for i := range 64 {
 		pool.Put(&struct{ x int }{x: i})
 	}
 	seen := make([]*Builder, 0, 64)
-	for i := 0; i < 64; i++ {
+	for range 64 {
 		b := Acquire()
 		if b == nil {
 			t.Fatal("Acquire must not return nil")
@@ -421,11 +421,11 @@ func TestAcquire_PoolWithBadType(t *testing.T) {
 }
 
 func TestAcquireBatchWriter_PoolWithBadType(t *testing.T) {
-	for i := 0; i < 64; i++ {
+	for i := range 64 {
 		batchWriterPool.Put(&struct{ x int }{x: i})
 	}
 	seen := make([]*BatchWriter, 0, 64)
-	for i := 0; i < 64; i++ {
+	for range 64 {
 		bw := AcquireBatchWriter()
 		if bw == nil {
 			t.Fatal("AcquireBatchWriter must not return nil")
@@ -542,13 +542,13 @@ func TestFindField_MalformedCases(t *testing.T) {
 		{"not_object", `"string"`, "k"},
 		{"missing_key_quote", `{abc:"val"}`, "abc"},
 		{"truncated_key", `{"`, "k"},
-		{"missing_colon", `{"key" "val"}`, "key"},
-		{"truncated_after_colon", `{"key":`, "key"},
-		{"bad_value", `{"key":}`, "key"},
+		{"missing_colon", `{"key" "val"}`, testKey},
+		{"truncated_after_colon", `{"key":`, testKey},
+		{"bad_value", `{"key":}`, testKey},
 		{"missing_comma_or_brace", `{"a":1 "b":2}`, "b"},
 		{"truncated_after_comma", `{"a":1,`, "b"},
 		{"truncated_after_value", `{"a":1`, "b"},
-		{"key_not_found_at_end", `{"a":1}`, "b"},
+		{"key_not_found_at_end", testJSONObjA1, "b"},
 	}
 	for _, tt := range cases {
 		val, ok := FindField([]byte(tt.data), tt.key)
@@ -592,7 +592,7 @@ func TestFindFieldString_Empty(t *testing.T) {
 }
 
 func TestFindFieldString_NotFound(t *testing.T) {
-	_, ok := FindFieldString(`{"a":1}`, "missing")
+	_, ok := FindFieldString(testJSONObjA1, "missing")
 	if ok {
 		t.Error("expected false for missing key")
 	}
@@ -997,7 +997,7 @@ func TestIterateArray_MixedTypes(t *testing.T) {
 	if !ok {
 		t.Fatal("expected ok=true")
 	}
-	want := []string{"1", `"two"`, "true", "null", `{"k":"v"}`, "[3]"}
+	want := []string{"1", `"two"`, litTrue, "null", `{"k":"v"}`, "[3]"}
 	if len(got) != len(want) {
 		t.Fatalf("len=%d, want %d", len(got), len(want))
 	}
@@ -1054,7 +1054,7 @@ func TestIterateArray_Malformed(t *testing.T) {
 		name string
 		data string
 	}{
-		{"not_array", `{"a":1}`},
+		{"not_array", testJSONObjA1},
 		{"unterminated", `[1,2`},
 		{"missing_comma", `[1 2]`},
 		{"empty_string", ``},
@@ -1079,7 +1079,7 @@ func TestIterateArray_NestedObjects(t *testing.T) {
 	if !ok {
 		t.Fatal("expected ok=true")
 	}
-	if len(got) != 2 || got[0] != `{"a":1}` || got[1] != `{"b":2}` {
+	if len(got) != 2 || got[0] != testJSONObjA1 || got[1] != testJSONObjB2 {
 		t.Errorf("got %v", got)
 	}
 }
@@ -1246,7 +1246,7 @@ func TestIterateArrayString_Basic(t *testing.T) {
 	if !ok {
 		t.Fatal("expected ok")
 	}
-	want := []string{"1", `"hello"`, "true"}
+	want := []string{"1", testJSONHelloLit, litTrue}
 	if len(got) != len(want) {
 		t.Fatalf("len=%d, want %d", len(got), len(want))
 	}
@@ -1302,7 +1302,7 @@ func TestDecodeString(t *testing.T) {
 		want string
 		ok   bool
 	}{
-		{`"hello"`, "hello", true},
+		{testJSONHelloLit, "hello", true},
 		{`""`, "", true},
 		{`"a\"b"`, `a"b`, true},
 		{`"a\\b"`, `a\b`, true},
@@ -1338,8 +1338,8 @@ func TestDecodeBool(t *testing.T) {
 		want bool
 		ok   bool
 	}{
-		{"true", true, true},
-		{"false", false, true},
+		{litTrue, true, true},
+		{litFalse, false, true},
 		{"True", false, false},
 		{"FALSE", false, false},
 		{"tru", false, false},

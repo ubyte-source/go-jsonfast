@@ -167,7 +167,8 @@ func TestSwarEscapeVsSkip_Difference(t *testing.T) {
 }
 
 func TestSwarEscapeVsSkip_Agreement(t *testing.T) {
-	for b := byte(0); b < 0x80; b++ {
+	for n := range 0x80 {
+		b := byte(n)
 		var buf [8]byte
 		for i := range buf {
 			buf[i] = 'a'

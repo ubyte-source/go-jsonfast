@@ -84,8 +84,8 @@ func TestBatchWriter_Write(t *testing.T) {
 
 func TestBatchWriter_WriteTo(t *testing.T) {
 	bw := NewBatchWriter(64)
-	bw.AppendString(`{"a":1}`)
-	bw.AppendString(`{"b":2}`)
+	bw.AppendString(testJSONObjA1)
+	bw.AppendString(testJSONObjB2)
 
 	var sink strings.Builder
 	n, err := bw.WriteTo(&sink)

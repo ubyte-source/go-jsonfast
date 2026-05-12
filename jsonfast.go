@@ -133,16 +133,16 @@ func (b *Builder) AddRawJSONField(name string, rawJSON []byte) {
 func (b *Builder) AddBoolField(name string, v bool) {
 	b.fieldKey(name)
 	if v {
-		b.buf = append(b.buf, "true"...)
+		b.buf = append(b.buf, litTrue...)
 	} else {
-		b.buf = append(b.buf, "false"...)
+		b.buf = append(b.buf, litFalse...)
 	}
 }
 
 // AddNullField adds "name":null.
 func (b *Builder) AddNullField(name string) {
 	b.fieldKey(name)
-	b.buf = append(b.buf, "null"...)
+	b.buf = append(b.buf, litNull...)
 }
 
 // AddIntField adds "name":<int>.
@@ -367,9 +367,9 @@ func (b *Builder) AddUint64FieldKey(k FieldKey, v uint64) {
 func (b *Builder) AddBoolFieldKey(k FieldKey, v bool) {
 	b.precomputedKey(k)
 	if v {
-		b.buf = append(b.buf, "true"...)
+		b.buf = append(b.buf, litTrue...)
 	} else {
-		b.buf = append(b.buf, "false"...)
+		b.buf = append(b.buf, litFalse...)
 	}
 }
 
@@ -401,7 +401,7 @@ func (b *Builder) AddFloat64FieldKey(k FieldKey, v float64) {
 // AddNullFieldKey adds "name":null using a pre-computed key.
 func (b *Builder) AddNullFieldKey(k FieldKey) {
 	b.precomputedKey(k)
-	b.buf = append(b.buf, "null"...)
+	b.buf = append(b.buf, litNull...)
 }
 
 // ---------------------------------------------------------------------------
@@ -425,7 +425,7 @@ func buildSafeASCII() [256]bool {
 // invalid UTF-8 bytes are replaced with U+FFFD.
 func (b *Builder) escapeString(s string) {
 	if len(s) <= 32 {
-		for i := 0; i < len(s); i++ {
+		for i := range len(s) {
 			if !safeASCII[s[i]] {
 				b.escapeSlow(s, i)
 				return
@@ -657,7 +657,7 @@ func (b *Builder) appendUint(x uint64) {
 
 func (b *Builder) appendFloat64(v float64) {
 	if math.IsNaN(v) || math.IsInf(v, 0) {
-		b.buf = append(b.buf, "null"...)
+		b.buf = append(b.buf, litNull...)
 		return
 	}
 	if v > -1e18 && v < 1e18 {

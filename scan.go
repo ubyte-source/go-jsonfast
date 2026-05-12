@@ -1,8 +1,16 @@
 package jsonfast
 
 import (
+	"slices"
 	"strconv"
 	"unsafe"
+)
+
+// JSON literal tokens for the three keyword values.
+const (
+	litTrue  = "true"
+	litFalse = "false"
+	litNull  = "null"
 )
 
 // wsTable[b] is true for ASCII whitespace (' ', '\n', '\r', '\t').
@@ -46,11 +54,11 @@ func skipScalar(data []byte, i int) (int, bool) {
 	}
 	switch data[i] {
 	case 't':
-		return matchLiteral(data, i, "true")
+		return matchLiteral(data, i, litTrue)
 	case 'f':
-		return matchLiteral(data, i, "false")
+		return matchLiteral(data, i, litFalse)
 	case 'n':
-		return matchLiteral(data, i, "null")
+		return matchLiteral(data, i, litNull)
 	}
 	return skipNumber(data, i)
 }
@@ -414,12 +422,7 @@ func matchesKey(data []byte, fp fieldPos, key string) bool {
 }
 
 func bytesContainBackslash(raw []byte) bool {
-	for _, c := range raw {
-		if c == '\\' {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(raw, '\\')
 }
 
 // decodeKeyEqual walks enc while decoding escapes, comparing each
@@ -876,11 +879,11 @@ func DecodeString(raw []byte) (string, bool) {
 func DecodeBool(raw []byte) (value, ok bool) {
 	switch len(raw) {
 	case 4:
-		if string(raw) == "true" {
+		if string(raw) == litTrue {
 			return true, true
 		}
 	case 5:
-		if string(raw) == "false" {
+		if string(raw) == litFalse {
 			return false, true
 		}
 	}

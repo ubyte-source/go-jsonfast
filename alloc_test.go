@@ -105,16 +105,7 @@ func TestZeroAlloc_AcquireRelease(t *testing.T) {
 
 func TestZeroAlloc_NestedStringMapField_Small(t *testing.T) {
 	builder := New(1024)
-	sd := map[string]map[string]string{
-		"exampleSDID@32473": {
-			"iut":         "3",
-			"eventSource": "Application",
-			"eventID":     "1011",
-		},
-		"examplePriority@32473": {
-			"class": "high",
-		},
-	}
+	sd := testSDFixture()
 	assertZeroAlloc(t, "NestedStringMapField", func() {
 		builder.Reset()
 		builder.BeginObject()
@@ -125,13 +116,7 @@ func TestZeroAlloc_NestedStringMapField_Small(t *testing.T) {
 
 func TestZeroAlloc_FlattenedMapField_Small(t *testing.T) {
 	builder := New(1024)
-	m := map[string]map[string]string{
-		"exampleSDID@32473": {
-			"iut":         "3",
-			"eventSource": "Application",
-			"eventID":     "1011",
-		},
-	}
+	m := testSDOnlyFixture()
 	assertZeroAlloc(t, "AddFlattenedMapField", func() {
 		builder.Reset()
 		builder.BeginObject()

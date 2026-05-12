@@ -15,11 +15,11 @@ func TestFlattenMap(t *testing.T) {
 		{
 			name: "single outer key",
 			input: map[string]map[string]string{
-				"host": {"name": "fw01", "ip": "10.0.0.1"},
+				"host": {"name": testHostnameFW01, "ip": testIPv4Host},
 			},
 			want: map[string]string{
-				"host.name": "fw01",
-				"host.ip":   "10.0.0.1",
+				"host.name": testHostnameFW01,
+				"host.ip":   testIPv4Host,
 			},
 		},
 		{
@@ -75,13 +75,13 @@ func TestAddFlattenedMapField(t *testing.T) {
 	b := New(512)
 	b.BeginObject()
 	m := map[string]map[string]string{
-		"host": {"name": "fw01"},
+		"host": {"name": testHostnameFW01},
 	}
 	b.AddFlattenedMapField(m)
 	b.EndObject()
 
 	result := string(b.Bytes())
-	assertContains(t, result, `"host.name":"fw01"`)
+	assertContains(t, result, `"host.name":"`+testHostnameFW01+`"`)
 }
 
 func TestAddFlattenedMapField_Empty(t *testing.T) {
@@ -172,8 +172,8 @@ func TestAddFlattenedMapField_MultipleInnerKeys(t *testing.T) {
 	b.BeginObject()
 	m := map[string]map[string]string{
 		"event": {
-			"src":  "10.0.0.1",
-			"dst":  "10.0.0.2",
+			"src":  testIPv4Host,
+			"dst":  testIPv4Peer,
 			"type": "alert",
 		},
 	}
@@ -181,22 +181,13 @@ func TestAddFlattenedMapField_MultipleInnerKeys(t *testing.T) {
 	b.EndObject()
 
 	result := string(b.Bytes())
-	assertContains(t, result, `"event.dst":"10.0.0.2"`)
-	assertContains(t, result, `"event.src":"10.0.0.1"`)
+	assertContains(t, result, `"event.dst":"`+testIPv4Peer+`"`)
+	assertContains(t, result, `"event.src":"`+testIPv4Host+`"`)
 	assertContains(t, result, `"event.type":"alert"`)
 }
 
 func BenchmarkFlattenMap(b *testing.B) {
-	m := map[string]map[string]string{
-		"exampleSDID@32473": {
-			"iut":         "3",
-			"eventSource": "Application",
-			"eventID":     "1011",
-		},
-		"examplePriority@32473": {
-			"class": "high",
-		},
-	}
+	m := testSDFixture()
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -207,16 +198,7 @@ func BenchmarkFlattenMap(b *testing.B) {
 
 func BenchmarkAddFlattenedMapField(b *testing.B) {
 	builder := New(512)
-	m := map[string]map[string]string{
-		"exampleSDID@32473": {
-			"iut":         "3",
-			"eventSource": "Application",
-			"eventID":     "1011",
-		},
-		"examplePriority@32473": {
-			"class": "high",
-		},
-	}
+	m := testSDFixture()
 
 	b.ResetTimer()
 	b.ReportAllocs()

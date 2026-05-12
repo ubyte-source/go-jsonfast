@@ -568,19 +568,12 @@ func TestBuilder_AddTimeRFC3339OffsetFieldKey(t *testing.T) {
 func TestBuilder_AddNestedStringMapField(t *testing.T) {
 	b := New(256)
 	b.BeginObject()
-	nestedMap := map[string]map[string]string{
-		"exampleSDID@32473": {
-			"iut":         "3",
-			"eventSource": "Application",
-			"eventID":     "1011",
-		},
-	}
-	b.AddNestedStringMapField("structured_data", nestedMap)
+	b.AddNestedStringMapField("structured_data", testSDOnlyFixture())
 	b.EndObject()
 
 	result := string(b.Bytes())
 	assertContains(t, result, `"structured_data"`)
-	assertContains(t, result, `"exampleSDID@32473"`)
+	assertContains(t, result, `"`+testSDID+`"`)
 	assertContains(t, result, `"iut"`)
 }
 
@@ -739,11 +732,12 @@ func TestBuilder_EscapeControlChars(t *testing.T) {
 func TestBuilder_EscapeAllControlChars(t *testing.T) {
 	b := New(256)
 	b.BeginObject()
-	s := ""
+	var sb strings.Builder
+	sb.Grow(0x20)
 	for i := range 0x20 {
-		s += string(rune(i))
+		sb.WriteRune(rune(i))
 	}
-	b.AddStringField("ctrl", s)
+	b.AddStringField("ctrl", sb.String())
 	b.EndObject()
 	result := string(b.Bytes())
 	assertContains(t, result, `\n`)
@@ -945,7 +939,7 @@ func TestExportedEscapeString_InvalidLeadingByte(t *testing.T) {
 func TestComplexJSON(t *testing.T) {
 	b := New(512)
 	b.BeginObject()
-	b.AddStringField("source", "10.0.0.1")
+	b.AddStringField("source", testIPv4Host)
 	b.AddStringField("timestamp", "1234567890")
 	b.AddRawJSONField("object", []byte(`{"message":"test","severity":5}`))
 	b.AddStringField("raw", "<189>1 test syslog message")
@@ -955,8 +949,8 @@ func TestComplexJSON(t *testing.T) {
 	if err := json.Unmarshal(b.Bytes(), &parsed); err != nil {
 		t.Fatalf("Generated invalid JSON: %v", err)
 	}
-	if parsed["source"] != "10.0.0.1" {
-		t.Errorf("Expected source=10.0.0.1, got %v", parsed["source"])
+	if parsed["source"] != testIPv4Host {
+		t.Errorf("Expected source=%s, got %v", testIPv4Host, parsed["source"])
 	}
 	obj, ok := parsed["object"].(map[string]any)
 	if !ok {
@@ -1130,16 +1124,7 @@ func BenchmarkBuilder_AppendInt(b *testing.B) {
 
 func BenchmarkBuilder_NestedStringMapField(b *testing.B) {
 	builder := New(1024)
-	sd := map[string]map[string]string{
-		"exampleSDID@32473": {
-			"iut":         "3",
-			"eventSource": "Application",
-			"eventID":     "1011",
-		},
-		"examplePriority@32473": {
-			"class": "high",
-		},
-	}
+	sd := testSDFixture()
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -1247,7 +1232,7 @@ func TestIsStructuralJSON(t *testing.T) {
 		{`}`, false},
 		{``, false},
 		{`x`, false},
-		{`"hello"`, false},
+		{testJSONHelloLit, false},
 		{`not json`, false},
 		{`123`, false},
 
@@ -1292,8 +1277,8 @@ func TestBuilder_AddNullField(t *testing.T) {
 func TestAddStringMapObject_WithRawJSON(t *testing.T) {
 	b := New(256)
 	m := map[string]string{
-		"object": `{"a":1}`,
-		"host":   "fw01",
+		"object": testJSONObjA1,
+		"host":   testHostnameFW01,
 	}
 	b.AddStringMapObject(m, "object")
 	got := string(b.Bytes())
@@ -1302,8 +1287,8 @@ func TestAddStringMapObject_WithRawJSON(t *testing.T) {
 	if err := json.Unmarshal([]byte(got), &parsed); err != nil {
 		t.Fatalf("invalid JSON: %v\ngot: %s", err, got)
 	}
-	assertContains(t, got, `"object":{"a":1}`)
-	assertContains(t, got, `"host":"fw01"`)
+	assertContains(t, got, `"object":`+testJSONObjA1)
+	assertContains(t, got, `"host":"`+testHostnameFW01+`"`)
 }
 
 func TestAddStringMapObject_SortedKeys(t *testing.T) {
@@ -1329,9 +1314,9 @@ func TestAddStringMapObject_SortedKeys(t *testing.T) {
 
 func TestAddStringMapObject_NoRawKey(t *testing.T) {
 	b := New(128)
-	m := map[string]string{"key": "value"}
+	m := map[string]string{testKey: "value"}
 	b.AddStringMapObject(m, "")
-	expect(t, `{"key":"value"}`, string(b.Bytes()))
+	expect(t, `{"`+testKey+`":"value"}`, string(b.Bytes()))
 }
 
 func TestAddStringMapObject_Empty(t *testing.T) {
