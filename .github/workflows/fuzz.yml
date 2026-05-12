@@ -1,0 +1,50 @@
+name: Fuzz
+
+on:
+  schedule:
+    - cron: "0 4 * * 1"
+  workflow_dispatch:
+    inputs:
+      fuzztime:
+        description: "Fuzz duration per target (e.g. 5m, 30m)"
+        required: false
+        default: "10m"
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: Fuzz ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - FuzzEscapeString
+          - FuzzSkipStringAt
+          - FuzzSkipBracedAt
+          - FuzzIterateFields
+          - FuzzFindField
+          - FuzzIsStructuralJSON
+          - FuzzIterateArray
+          - FuzzFlattenObject
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: stable
+
+      - name: Run fuzz
+        run: go test -fuzz=^${{ matrix.target }}$ -fuzztime=${{ github.event.inputs.fuzztime || '10m' }} -run=^$ ./...
+
+      - name: Upload corpus on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-corpus-${{ matrix.target }}
+          path: testdata/fuzz/${{ matrix.target }}
+          if-no-files-found: ignore
