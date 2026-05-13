@@ -4,6 +4,10 @@
 > schemas and ultra-high-throughput pipelines.
 
 [![Go Version](https://img.shields.io/badge/Go-1.25+-blue.svg)](https://golang.org)
+[![Lint](https://github.com/ubyte-source/go-jsonfast/actions/workflows/lint.yml/badge.svg)](https://github.com/ubyte-source/go-jsonfast/actions/workflows/lint.yml)
+[![Test](https://github.com/ubyte-source/go-jsonfast/actions/workflows/test.yml/badge.svg)](https://github.com/ubyte-source/go-jsonfast/actions/workflows/test.yml)
+[![Security](https://github.com/ubyte-source/go-jsonfast/actions/workflows/security.yml/badge.svg)](https://github.com/ubyte-source/go-jsonfast/actions/workflows/security.yml)
+[![Fuzz](https://github.com/ubyte-source/go-jsonfast/actions/workflows/fuzz.yml/badge.svg)](https://github.com/ubyte-source/go-jsonfast/actions/workflows/fuzz.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/ubyte-source/go-jsonfast.svg)](https://pkg.go.dev/github.com/ubyte-source/go-jsonfast)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 [![Zero Dependencies](https://img.shields.io/badge/Dependencies-0-brightgreen.svg)](go.mod)
