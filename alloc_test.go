@@ -91,6 +91,57 @@ func TestZeroAlloc_NestedObjectField(t *testing.T) {
 	})
 }
 
+// TestZeroAlloc_AllScalarFields covers every remaining scalar Add*
+// method (string-keyed and FieldKey variants) in one pass.
+func TestZeroAlloc_AllScalarFields(t *testing.T) {
+	builder := New(1024)
+	ts := time.Date(2024, 1, 15, 12, 30, 45, 123456789, time.FixedZone("CET", 3600))
+	raw := []byte(`{"nested":true}`)
+	rawName := []byte("rawname")
+	kBool := NewFieldKey("kbool")
+	kNull := NewFieldKey("knull")
+	kI64 := NewFieldKey("ki64")
+	kU64 := NewFieldKey("ku64")
+	kF64 := NewFieldKey("kf64")
+	kRaw := NewFieldKey("kraw")
+	kOff := NewFieldKey("koff")
+	assertZeroAlloc(t, "AllScalarFields", func() {
+		builder.Reset()
+		builder.BeginObject()
+		builder.AddBoolField("b1", true)
+		builder.AddBoolField("b2", false)
+		builder.AddBoolFieldKey(kBool, true)
+		builder.AddNullField("n1")
+		builder.AddNullFieldKey(kNull)
+		builder.AddInt64Field("i1", -9007199254740993)
+		builder.AddInt64FieldKey(kI64, 1<<62)
+		builder.AddUint64Field("u1", 18446744073709551615)
+		builder.AddUint64FieldKey(kU64, 0)
+		builder.AddFloat64FieldKey(kF64, 2.718281828459045)
+		builder.AddRawJSONField("r1", raw)
+		builder.AddRawJSONFieldKey(kRaw, raw)
+		builder.AddRawBytesField(rawName, raw)
+		builder.AddTimeRFC3339OffsetField("t1", ts)
+		builder.AddTimeRFC3339OffsetFieldKey(kOff, ts)
+		builder.EndObject()
+	})
+}
+
+func TestZeroAlloc_StringMapObject(t *testing.T) {
+	builder := New(1024)
+	m := map[string]string{"alpha": "1", "beta": "2", "gamma": `{"j":1}`}
+	assertZeroAlloc(t, "StringMapObject", func() {
+		builder.Reset()
+		builder.AddStringMapObject(m, "gamma")
+	})
+	assertZeroAlloc(t, "StringMapObjectField", func() {
+		builder.Reset()
+		builder.BeginObject()
+		builder.AddStringMapObjectField("attrs", m, "")
+		builder.EndObject()
+	})
+}
+
 func TestZeroAlloc_AcquireRelease(t *testing.T) {
 	WarmPool(4)
 	assertZeroAlloc(t, "AcquireRelease", func() {
@@ -150,6 +201,51 @@ func TestZeroAlloc_Scan_IterateStringArray(t *testing.T) {
 	data := []byte(`["alpha","bravo","charlie","delta","echo"]`)
 	assertZeroAlloc(t, "IterateStringArray", func() {
 		IterateStringArray(data, func(_ string) bool { return true })
+	})
+}
+
+func TestZeroAlloc_Scan_StringVariants(t *testing.T) {
+	obj := `{"facility":23,"hostname":"FW01"}`
+	arr := `["alpha","bravo","charlie"]`
+	assertZeroAlloc(t, "IterateFieldsString", func() {
+		IterateFieldsString(obj, func(_, _ []byte) bool { return true })
+	})
+	assertZeroAlloc(t, "FindFieldString", func() {
+		_, _ = FindFieldString(obj, "hostname")
+	})
+	assertZeroAlloc(t, "IterateArrayString", func() {
+		IterateArrayString(arr, func(_ []byte) bool { return true })
+	})
+	assertZeroAlloc(t, "IterateStringArrayString", func() {
+		IterateStringArrayString(arr, func(_ string) bool { return true })
+	})
+}
+
+func TestZeroAlloc_Scan_SkipPrimitives(t *testing.T) {
+	doc := []byte(`  {"k":[1,2,{"x":"y \" z"}],"n":-12.5e3}  `)
+	str := []byte(`"escaped \" and long tail abcdefghijklmnopqrstuvwxyz"`)
+	assertZeroAlloc(t, "SkipWS+SkipValueAt", func() {
+		i := SkipWS(doc, 0)
+		_, _ = SkipValueAt(doc, i)
+	})
+	assertZeroAlloc(t, "SkipStringAt", func() {
+		_, _ = SkipStringAt(str, 0)
+	})
+	assertZeroAlloc(t, "SkipBracedAt", func() {
+		_, _ = SkipBracedAt(doc, 2, '{', '}')
+	})
+}
+
+func TestZeroAlloc_Decoders(t *testing.T) {
+	rawBool := []byte(`true`)
+	rawInt := []byte(`-9223372036854775808`)
+	rawUint := []byte(`18446744073709551615`)
+	rawFloat := []byte(`-12.5e3`)
+	assertZeroAlloc(t, "Decode scalars", func() {
+		_, _ = DecodeBool(rawBool)
+		_, _ = DecodeInt64(rawInt)
+		_, _ = DecodeUint64(rawUint)
+		_, _ = DecodeFloat64(rawFloat)
 	})
 }
 

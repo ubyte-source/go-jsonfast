@@ -1837,6 +1837,77 @@ func TestFieldKey_Float64Field(t *testing.T) {
 	}
 }
 
+func TestNewFieldKey_PanicsOnUnsafeName(t *testing.T) {
+	for _, name := range []string{
+		`quo"te`, `back\slash`, "tab\there", "nl\nhere",
+		"nul\x00", "high\x80bit", "café",
+	} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("NewFieldKey(%q): expected panic", name)
+				}
+			}()
+			NewFieldKey(name)
+		}()
+	}
+}
+
+func TestNewFieldKey_AcceptsAllSafeASCII(t *testing.T) {
+	for c := byte(0x20); c < 0x80; c++ {
+		if c == '"' || c == '\\' {
+			continue
+		}
+		name := "k" + string(c)
+		if got := NewFieldKey(name); got != FieldKey(`,"`+name+`":`) {
+			t.Fatalf("NewFieldKey(%q) = %q", name, got)
+		}
+	}
+}
+
+func TestAddTimeRFC3339OffsetField_SubMinuteOffsetTruncated(t *testing.T) {
+	// Historic zones can carry second-level offsets; RFC 3339 cannot
+	// express them, so they are truncated to whole minutes and the
+	// emitted instant must round-trip exactly.
+	loc := time.FixedZone("LMT", 3*3600+25*60+21) // +03:25:21
+	in := time.Date(2024, 1, 15, 12, 0, 0, 0, loc)
+	b := New(64)
+	b.BeginObject()
+	b.AddTimeRFC3339OffsetField("t", in)
+	b.EndObject()
+	out := string(b.Bytes())
+	assertContains(t, out, "+03:25\"")
+
+	parsed, err := time.Parse(time.RFC3339, out[6:len(out)-2])
+	if err != nil {
+		t.Fatalf("output %s does not parse as RFC 3339: %v", out, err)
+	}
+	if !parsed.Equal(in) {
+		t.Errorf("round-trip mismatch: emitted %s parses to %v, want instant %v", out, parsed.UTC(), in.UTC())
+	}
+}
+
+func TestAddTimeRFC3339OffsetField_NegativeSubMinuteBecomesZ(t *testing.T) {
+	// -30s truncates to zero: must emit Z, never the "-00:00"
+	// unknown-offset form, and still round-trip.
+	loc := time.FixedZone("X", -30)
+	in := time.Date(2024, 1, 15, 12, 0, 0, 0, loc)
+	b := New(64)
+	b.BeginObject()
+	b.AddTimeRFC3339OffsetField("t", in)
+	b.EndObject()
+	out := string(b.Bytes())
+	assertContains(t, out, "Z\"")
+
+	parsed, err := time.Parse(time.RFC3339, out[6:len(out)-2])
+	if err != nil {
+		t.Fatalf("output %s does not parse: %v", out, err)
+	}
+	if !parsed.Equal(in) {
+		t.Errorf("round-trip mismatch: %s → %v, want %v", out, parsed.UTC(), in.UTC())
+	}
+}
+
 func TestFieldKey_NullField(t *testing.T) {
 	k := NewFieldKey("absent")
 	b := New(128)

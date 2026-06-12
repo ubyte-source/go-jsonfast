@@ -6,6 +6,7 @@ import (
 	"math"
 	"strconv"
 	"testing"
+	"time"
 )
 
 func FuzzSkipStringAt(f *testing.F) {
@@ -272,5 +273,48 @@ func assertFloat64StdlibParity(t *testing.T, v float64, out []byte) {
 	}
 	if !bytes.Equal(out, want) {
 		t.Fatalf("appendFloat64(%g) = %s, encoding/json = %s", v, out, want)
+	}
+}
+
+// FuzzTimeRFC3339Parity asserts both time emitters are byte-identical
+// to time.RFC3339Nano formatting within the supported domain (epoch ≤ t,
+// year ≤ 9999, whole-minute offsets). When a negative offset would need
+// a pre-epoch wall date, the offset emitter falls back to the UTC form
+// of the same instant.
+func FuzzTimeRFC3339Parity(f *testing.F) {
+	f.Add(int64(0), int64(0), 0)
+	f.Add(int64(1705321845), int64(123456789), 0)
+	f.Add(int64(1705321845), int64(0), 3600)
+	f.Add(int64(253402300799), int64(999999999), -7200) // 9999-12-31T23:59:59
+	f.Add(int64(0), int64(0), -83)                      // epoch with negative offset
+	f.Fuzz(func(t *testing.T, sec, nsec int64, offset int) {
+		if sec < 0 || nsec < 0 || nsec > 999999999 || offset < -24*3600 || offset > 24*3600 {
+			return
+		}
+		offset = offset / 60 * 60 // stdlib Format cannot round-trip sub-minute offsets
+		in := time.Unix(sec, nsec).In(time.FixedZone("", offset))
+		if in.Year() > 9999 || in.UTC().Year() > 9999 {
+			return
+		}
+		assertTimeParity(t, in, sec+int64(offset) < 0)
+	})
+}
+
+func assertTimeParity(t *testing.T, in time.Time, preEpochWall bool) {
+	t.Helper()
+	b := New(64)
+	b.appendTimeRFC3339(in)
+	if got, want := string(b.Bytes()), `"`+in.UTC().Format(time.RFC3339Nano)+`"`; got != want {
+		t.Errorf("appendTimeRFC3339(%v) = %s, stdlib = %s", in, got, want)
+	}
+
+	want := `"` + in.Format(time.RFC3339Nano) + `"`
+	if preEpochWall {
+		want = `"` + in.UTC().Format(time.RFC3339Nano) + `"`
+	}
+	b.Reset()
+	b.appendTimeRFC3339Offset(in)
+	if got := string(b.Bytes()); got != want {
+		t.Errorf("appendTimeRFC3339Offset(%v) = %s, want %s", in, got, want)
 	}
 }

@@ -179,7 +179,10 @@ func (b *Builder) AddTimeRFC3339Field(name string, t time.Time) {
 }
 
 // AddTimeRFC3339OffsetField adds "name":"<RFC3339>" preserving the
-// input timezone offset (Z, +HH:MM, or -HH:MM).
+// input timezone offset (Z, +HH:MM, or -HH:MM). Offsets are truncated
+// to whole minutes (RFC 3339 cannot express seconds). If a negative
+// offset would require a pre-epoch wall date, the UTC form of the same
+// instant is emitted instead.
 func (b *Builder) AddTimeRFC3339OffsetField(name string, t time.Time) {
 	b.fieldKey(name)
 	b.appendTimeRFC3339Offset(t)
@@ -305,8 +308,17 @@ func (b *Builder) writeInnerMap(m map[string]string) {
 // empty keys.
 type FieldKey string
 
-// NewFieldKey returns a FieldKey for the given safe-ASCII name.
+// NewFieldKey returns a FieldKey for the given name. The name must be
+// safe ASCII (printable, excluding '"' and '\\'); NewFieldKey panics
+// otherwise, since the prefix is cached verbatim and an unsafe name
+// would silently corrupt every object that uses it. Call at init time,
+// like regexp.MustCompile.
 func NewFieldKey(name string) FieldKey {
+	for i := range len(name) {
+		if !safeASCII[name[i]] {
+			panic("jsonfast.NewFieldKey: name contains byte requiring JSON escaping: " + strconv.QuoteToASCII(name))
+		}
+	}
 	return FieldKey(`,"` + name + `":`)
 }
 
@@ -391,8 +403,8 @@ func (b *Builder) AddTimeRFC3339FieldKey(k FieldKey, t time.Time) {
 	b.appendTimeRFC3339(t)
 }
 
-// AddTimeRFC3339OffsetFieldKey adds "name":"<RFC3339>" preserving the
-// timezone offset, using a pre-computed key.
+// AddTimeRFC3339OffsetFieldKey adds "name":"<RFC3339>" using a
+// pre-computed key. Semantics match AddTimeRFC3339OffsetField.
 func (b *Builder) AddTimeRFC3339OffsetFieldKey(k FieldKey, t time.Time) {
 	b.precomputedKey(k)
 	b.appendTimeRFC3339Offset(t)
@@ -715,10 +727,22 @@ func (b *Builder) appendTimeRFC3339(t time.Time) {
 
 func (b *Builder) appendTimeRFC3339Offset(t time.Time) {
 	_, offset := t.Zone()
-	unix := t.Unix() + int64(offset)
+	// RFC 3339 cannot express sub-minute offsets: truncate toward zero
+	// before computing the wall time, so the emitted instant round-trips
+	// exactly (and -30s becomes Z rather than the "-00:00" unknown-offset
+	// form).
+	offset = offset / 60 * 60
+	wall := max(t.Unix(), 0) + int64(offset)
+	if wall < 0 {
+		// A negative offset near the epoch would need a pre-epoch wall
+		// date, which is outside the formatter's domain. The UTC form
+		// represents the same (epoch-clamped) instant exactly.
+		b.appendTimeRFC3339(t)
+		return
+	}
 
 	b.buf = append(b.buf, '"')
-	b.appendCivilDateTime(unix)
+	b.appendCivilDateTime(wall)
 	if ns := t.Nanosecond(); ns > 0 {
 		b.buf = append(b.buf, '.')
 		b.appendNano(ns)
@@ -756,6 +780,8 @@ func (b *Builder) appendCivilDateTime(unix int64) {
 	)
 }
 
+// appendZoneOffset writes Z or ±HH:MM. offset must be a whole number
+// of minutes (the caller truncates).
 func (b *Builder) appendZoneOffset(offset int) {
 	if offset == 0 {
 		b.buf = append(b.buf, 'Z')

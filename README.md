@@ -185,7 +185,7 @@ See the [package documentation](https://pkg.go.dev/github.com/ubyte-source/go-js
 | `AddNestedStringMapField(name, m)` | `"name":{outer:{inner:"v",...},...}`, sorted |
 | `AddStringMapObject(m, rawJSONKey)` | Writes `m` as a standalone JSON object (no field name), keys sorted. The entry whose key equals `rawJSONKey` is emitted as raw JSON when `IsStructuralJSON` accepts the value, otherwise as a regular string field. |
 | `AddStringMapObjectField(name, m, rawJSONKey)` | `"name":{...}` form of `AddStringMapObject`. |
-| `AddTimeRFC3339OffsetField(name, t time.Time)` | `"name":"YYYY-MM-DDThh:mm:ss[.fffffffff]<±HH:MM\|Z>"` — preserves `t`'s offset. |
+| `AddTimeRFC3339OffsetField(name, t time.Time)` | `"name":"YYYY-MM-DDThh:mm:ss[.fffffffff]<±HH:MM\|Z>"` — preserves `t`'s offset, truncated to whole minutes; falls back to the UTC form when a negative offset would need a pre-epoch wall date. |
 | `AddFlattenedMapField(m)` | flat `"outer.inner":"value"` fields, sorted |
 
 Field name requirement: safe ASCII (no escaping required). For untrusted
@@ -205,7 +205,7 @@ emitted from the cached `FieldKey` instead of being escaped per call.
 | Function | Notes |
 |----------|-------|
 | `type FieldKey string` | Typed string holding `,"name":` |
-| `NewFieldKey(name string) FieldKey` | Factory; call at init time |
+| `NewFieldKey(name string) FieldKey` | Factory; call at init time. Panics if name needs JSON escaping. |
 | `AddStringFieldKey` / `AddStringArrayFieldKey` | String / string-array |
 | `AddIntFieldKey` / `AddInt64FieldKey` / `AddUint64FieldKey` | Integers |
 | `AddFloat64FieldKey` / `AddBoolFieldKey` / `AddNullFieldKey` | Other scalars |
@@ -307,16 +307,16 @@ For whitespace compaction use the standard library's `encoding/json.Compact`.
 Measured on a 32-core x86-64 server, Go 1.25.9, with `default.pgo` enabled.
 
 ```
-BenchmarkBuilder_FullSyslogObject-32             160 ns/op     0 B/op    0 allocs/op
-BenchmarkBuilder_FullSyslogObject_FieldKey-32    150 ns/op     0 B/op    0 allocs/op
+BenchmarkBuilder_FullSyslogObject-32             231 ns/op     0 B/op    0 allocs/op
+BenchmarkBuilder_FullSyslogObject_FieldKey-32    145 ns/op     0 B/op    0 allocs/op
 BenchmarkBuilder_EscapeString_PureASCII-32        34 ns/op     0 B/op    0 allocs/op
-BenchmarkBuilder_NestedStringMapField-32         378 ns/op     0 B/op    0 allocs/op
-BenchmarkBuilder_AcquireRelease-32                32 ns/op     0 B/op    0 allocs/op
-BenchmarkIterateFields-32                        140 ns/op     0 B/op    0 allocs/op
-BenchmarkFindField-32                            104 ns/op     0 B/op    0 allocs/op
-BenchmarkIterateArray_Strings100-32             1300 ns/op     0 B/op    0 allocs/op
-BenchmarkParallel_FindField-32                   7.4 ns/op  11 GB/s      0 allocs/op
-BenchmarkParallel_EscapeString_PureASCII-32      1.9 ns/op  60 GB/s      0 allocs/op
+BenchmarkBuilder_NestedStringMapField-32         392 ns/op     0 B/op    0 allocs/op
+BenchmarkBuilder_AcquireRelease-32                36 ns/op     0 B/op    0 allocs/op
+BenchmarkIterateFields-32                        144 ns/op     0 B/op    0 allocs/op
+BenchmarkFindField-32                            126 ns/op     0 B/op    0 allocs/op
+BenchmarkIterateArray_Strings100-32             1271 ns/op     0 B/op    0 allocs/op
+BenchmarkParallel_FindField-32                   8.6 ns/op   9.7 GB/s   0 allocs/op
+BenchmarkParallel_EscapeString_PureASCII-32      1.9 ns/op    62 GB/s   0 allocs/op
 ```
 
 Run with:

@@ -21,7 +21,8 @@
 //
 // Field names passed to Add*Field are JSON-escaped on output, so any Go
 // string is safe. NewFieldKey caches the prefix verbatim and therefore
-// requires a safe-ASCII name (printable ASCII excluding '"' and '\\').
+// requires a safe-ASCII name (printable ASCII excluding '"' and '\\');
+// it panics on any other input, like regexp.MustCompile.
 //
 // # Numbers
 //
