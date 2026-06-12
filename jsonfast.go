@@ -7,14 +7,14 @@ import (
 	"strconv"
 	"sync"
 	"time"
-	"unsafe"
+	"unicode/utf8"
 )
 
-// Builder appends JSON into a reusable byte slice. Not safe for
-// concurrent use.
+// Builder appends JSON into a reusable byte slice. The zero value is
+// ready to use. Not safe for concurrent use.
 type Builder struct {
-	buf   []byte
-	first bool
+	buf     []byte
+	needSep bool
 }
 
 // New returns a Builder with the given initial capacity. Non-positive
@@ -23,16 +23,13 @@ func New(capacity int) *Builder {
 	if capacity <= 0 {
 		capacity = 256
 	}
-	return &Builder{
-		buf:   make([]byte, 0, capacity),
-		first: true,
-	}
+	return &Builder{buf: make([]byte, 0, capacity)}
 }
 
 // Reset clears the buffer contents while retaining the backing array.
 func (b *Builder) Reset() {
 	b.buf = b.buf[:0]
-	b.first = true
+	b.needSep = false
 }
 
 // Bytes returns the accumulated bytes. The slice aliases the internal
@@ -64,7 +61,7 @@ func (b *Builder) WriteTo(w io.Writer) (int64, error) {
 // BeginObject writes '{' and resets the field separator state.
 func (b *Builder) BeginObject() {
 	b.buf = append(b.buf, '{')
-	b.first = true
+	b.needSep = false
 }
 
 // EndObject writes '}'.
@@ -75,26 +72,26 @@ func (b *Builder) EndObject() { b.buf = append(b.buf, '}') }
 func (b *Builder) BeginObjectField(name string) {
 	b.fieldKey(name)
 	b.buf = append(b.buf, '{')
-	b.first = true
+	b.needSep = false
 }
 
 // BeginObjectFieldKey opens a nested object with a pre-computed key.
 func (b *Builder) BeginObjectFieldKey(k FieldKey) {
 	b.precomputedKey(k)
 	b.buf = append(b.buf, '{')
-	b.first = true
+	b.needSep = false
 }
 
 // EndObjectField closes a nested object opened by BeginObjectField or
 // BeginObjectFieldKey and restores the outer separator state.
 func (b *Builder) EndObjectField() {
 	b.buf = append(b.buf, '}')
-	b.first = false
+	b.needSep = true
 }
 
 func (b *Builder) sep() {
-	if b.first {
-		b.first = false
+	if !b.needSep {
+		b.needSep = true
 		return
 	}
 	b.buf = append(b.buf, ',')
@@ -160,6 +157,12 @@ func (b *Builder) AddInt64Field(name string, v int64) {
 		return
 	}
 	b.appendUint(uint64(v))
+}
+
+// AddUint64Field adds "name":<uint64>.
+func (b *Builder) AddUint64Field(name string, v uint64) {
+	b.fieldKey(name)
+	b.appendUint(v)
 }
 
 // AddFloat64Field adds "name":<float64>. NaN and ±Inf are emitted as null.
@@ -234,7 +237,7 @@ func (b *Builder) AddStringMapObject(m map[string]string, rawJSONKey string) {
 func (b *Builder) AddStringMapObjectField(name string, m map[string]string, rawJSONKey string) {
 	b.fieldKey(name)
 	b.AddStringMapObject(m, rawJSONKey)
-	b.first = false
+	b.needSep = true
 }
 
 // AddNestedStringMapField adds "name":{outer:{inner:"v"}}, keys sorted
@@ -297,6 +300,9 @@ func (b *Builder) writeInnerMap(m map[string]string) {
 }
 
 // FieldKey is a pre-computed field prefix in the form `,"name":`.
+// Construct via NewFieldKey or as a typed string literal matching that
+// layout exactly; the methods index into it and panic on malformed or
+// empty keys.
 type FieldKey string
 
 // NewFieldKey returns a FieldKey for the given safe-ASCII name.
@@ -305,8 +311,8 @@ func NewFieldKey(name string) FieldKey {
 }
 
 func (b *Builder) precomputedKey(k FieldKey) {
-	if b.first {
-		b.first = false
+	if !b.needSep {
+		b.needSep = true
 		b.buf = append(b.buf, k[1:]...)
 		return
 	}
@@ -422,7 +428,8 @@ func buildSafeASCII() [256]bool {
 }
 
 // escapeString writes s with JSON escaping and UTF-8 validation;
-// invalid UTF-8 bytes are replaced with U+FFFD.
+// invalid UTF-8 sequences are replaced with U+FFFD per byte of the
+// maximal subpart, matching encoding/json.
 func (b *Builder) escapeString(s string) {
 	if len(s) <= 32 {
 		for i := range len(s) {
@@ -460,21 +467,16 @@ func (b *Builder) escapeSlow(s string, start int) {
 }
 
 // swarScanSafe returns the index of the first byte at or after i that
-// requires escaping, or len(s) if all remaining bytes are safe.
-//
-//nolint:gosec // unsafe pointer math is load-bearing for SWAR throughput
+// requires escaping, or len(s) if all remaining bytes are safe. i must
+// be in [0, len(s)].
 func swarScanSafe(s string, i int) int {
 	n := len(s)
 	j := i
-	if n-j >= 8 {
-		p := unsafe.Pointer(unsafe.StringData(s))
-		for j+8 <= n {
-			w := *(*uint64)(unsafe.Add(p, j))
-			if swarSpecialEscape(w) != 0 {
-				break
-			}
-			j += 8
+	for j+8 <= n {
+		if swarSpecialEscape(load64String(s, j)) != 0 {
+			break
 		}
+		j += 8
 	}
 	for j < n && safeASCII[s[j]] {
 		j++
@@ -506,72 +508,23 @@ var hexDigits = [16]byte{
 	'8', '9', 'a', 'b', 'c', 'd', 'e', 'f',
 }
 
-// escapeMultiByte validates a UTF-8 sequence and copies it verbatim on
-// success, or replaces it with U+FFFD and returns the bytes consumed.
+// escapeMultiByte copies one valid UTF-8 sequence verbatim, or emits
+// U+FFFD for each byte of an invalid one (Unicode maximal-subpart
+// policy via utf8.DecodeRuneInString, matching encoding/json) and
+// returns the bytes consumed.
 func (b *Builder) escapeMultiByte(s string, i int) int {
-	size := utf8SeqLen(s[i])
-	if size == 0 || i+size > len(s) || !validContinuation(s, i, size) {
+	r, size := utf8.DecodeRuneInString(s[i:])
+	if r == utf8.RuneError && size <= 1 {
 		b.buf = append(b.buf, 0xEF, 0xBF, 0xBD)
 		return 1
-	}
-	if !validCodepoint(s, i, size) {
-		b.buf = append(b.buf, 0xEF, 0xBF, 0xBD)
-		return size
 	}
 	b.buf = append(b.buf, s[i:i+size]...)
 	return size
 }
 
-// validCodepoint rejects overlong encodings, surrogates, and codepoints
-// above U+10FFFF. Called after validContinuation.
-func validCodepoint(s string, i, size int) bool {
-	_ = s[i+size-1]
-	switch size {
-	case 3:
-		_ = s[i+2]
-		cp := rune(s[i]&0x0F)<<12 | rune(s[i+1]&0x3F)<<6 | rune(s[i+2]&0x3F)
-		return cp >= 0x0800 && (cp < 0xD800 || cp > 0xDFFF)
-	case 4:
-		_ = s[i+3]
-		cp := rune(s[i]&0x07)<<18 | rune(s[i+1]&0x3F)<<12 |
-			rune(s[i+2]&0x3F)<<6 | rune(s[i+3]&0x3F)
-		return cp >= 0x10000 && cp <= 0x10FFFF
-	}
-	return true
-}
-
-// utf8SeqLen returns the byte length implied by a UTF-8 leading byte,
-// or 0 if it is not a valid leader.
-func utf8SeqLen(c byte) int {
-	switch {
-	case c >= 0xC2 && c <= 0xDF:
-		return 2
-	case c&0xF0 == 0xE0:
-		return 3
-	case c >= 0xF0 && c <= 0xF4:
-		return 4
-	default:
-		return 0
-	}
-}
-
-// validContinuation reports whether s[i+1..i+size-1] are continuation bytes.
-func validContinuation(s string, i, size int) bool {
-	_ = s[i+size-1]
-	switch size {
-	case 2:
-		return s[i+1]&0xC0 == 0x80
-	case 3:
-		return s[i+1]&0xC0 == 0x80 && s[i+2]&0xC0 == 0x80
-	case 4:
-		return s[i+1]&0xC0 == 0x80 && s[i+2]&0xC0 == 0x80 && s[i+3]&0xC0 == 0x80
-	}
-	return false
-}
-
 // EscapeString returns s with JSON escaping. If s is already safe ASCII
-// it is returned unchanged (zero allocation). Invalid UTF-8 bytes are
-// replaced with U+FFFD.
+// it is returned unchanged (zero allocation). Invalid UTF-8 sequences
+// are replaced with U+FFFD, matching encoding/json.
 func EscapeString(s string) string {
 	if swarScanSafe(s, 0) == len(s) {
 		return s
@@ -655,23 +608,60 @@ func (b *Builder) appendUint(x uint64) {
 	b.buf = append(b.buf, tmp[i:]...)
 }
 
+// appendFloat64 emits v matching encoding/json: shortest round-trip
+// form, 'e' notation for |v| < 1e-6 or ≥ 1e21 (with single-digit
+// negative exponents unpadded), and an exact-integer fast path for
+// integral values in (-1e18, 1e18). NaN and ±Inf are emitted as null.
 func (b *Builder) appendFloat64(v float64) {
 	if math.IsNaN(v) || math.IsInf(v, 0) {
 		b.buf = append(b.buf, litNull...)
 		return
 	}
-	if v > -1e18 && v < 1e18 {
-		if iv := int64(v); float64(iv) == v {
-			if iv < 0 {
-				b.buf = append(b.buf, '-')
-				b.appendUint(absInt64AsUint64(iv))
-				return
-			}
-			b.appendUint(uint64(iv))
-			return
-		}
+	if b.tryAppendIntegralFloat(v) {
+		return
 	}
-	b.buf = strconv.AppendFloat(b.buf, v, 'f', -1, 64)
+	b.appendFloatShortest(v)
+}
+
+// tryAppendIntegralFloat emits v as an exact integer when it is
+// integral and inside (-1e18, 1e18). -0 is excluded so the sign
+// survives in the output.
+func (b *Builder) tryAppendIntegralFloat(v float64) bool {
+	if v <= -1e18 || v >= 1e18 {
+		return false
+	}
+	iv := int64(v)
+	if float64(iv) != v || (iv == 0 && math.Signbit(v)) {
+		return false
+	}
+	if iv < 0 {
+		b.buf = append(b.buf, '-')
+		b.appendUint(absInt64AsUint64(iv))
+		return true
+	}
+	b.appendUint(uint64(iv))
+	return true
+}
+
+func (b *Builder) appendFloatShortest(v float64) {
+	format := byte('f')
+	if abs := math.Abs(v); abs != 0 && (abs < 1e-6 || abs >= 1e21) {
+		format = 'e'
+	}
+	b.buf = strconv.AppendFloat(b.buf, v, format, -1, 64)
+	if format == 'e' {
+		b.trimExponentZero()
+	}
+}
+
+// trimExponentZero rewrites a trailing "e-0X" to "e-X" (encoding/json
+// compatibility; strconv pads negative exponents to two digits).
+func (b *Builder) trimExponentZero() {
+	n := len(b.buf)
+	if n >= 4 && b.buf[n-4] == 'e' && b.buf[n-3] == '-' && b.buf[n-2] == '0' {
+		b.buf[n-2] = b.buf[n-1]
+		b.buf = b.buf[:n-1]
+	}
 }
 
 // absInt64AsUint64 returns |v| as a uint64, handling math.MinInt64.
@@ -686,10 +676,9 @@ func absInt64AsUint64(v int64) uint64 {
 // RFC 3339 time formatting
 // ---------------------------------------------------------------------------
 
-// civilDate converts Unix seconds to (year, month, day). Negative
-// inputs are clamped to the epoch; years > 9999 are clamped to 9999.
+// civilDate converts non-negative Unix seconds to (year, month, day).
+// Years above 9999 are clamped to 9999.
 func civilDate(sec int64) (year, month, day int) {
-	sec = max(sec, 0)
 	days := sec / 86400
 	z := days + 719468
 	era := z / 146097
@@ -708,9 +697,7 @@ func civilDate(sec int64) (year, month, day int) {
 	if m <= 2 {
 		y++
 	}
-	year = int(y)
-	year = max(year, 0)
-	year = min(year, 9999)
+	year = min(int(y), 9999)
 	month = int(m)
 	day = int(d)
 	return year, month, day
@@ -741,13 +728,13 @@ func (b *Builder) appendTimeRFC3339Offset(t time.Time) {
 }
 
 func (b *Builder) appendCivilDateTime(unix int64) {
-	sec := max(unix, 0)
+	sec := max(unix, 0) // clamp pre-epoch timestamps to the epoch
 	daySeconds := sec % 86400
 	hour := int(daySeconds / 3600)
 	minute := int(daySeconds % 3600 / 60)
 	secs := int(daySeconds % 60)
 
-	year, month, day := civilDate(unix)
+	year, month, day := civilDate(sec)
 
 	// &0x7F masks make *2+1 < 256 provable at BCE.
 	yc := (year / 100) & 0x7F
@@ -824,10 +811,7 @@ const (
 
 var pool = sync.Pool{
 	New: func() any {
-		return &Builder{
-			buf:   make([]byte, 0, poolBufferSize),
-			first: true,
-		}
+		return &Builder{buf: make([]byte, 0, poolBufferSize)}
 	},
 }
 
@@ -853,17 +837,7 @@ func Release(b *Builder) {
 
 // WarmPool pre-allocates n Builders and returns them to the pool.
 func WarmPool(n int) {
-	if n <= 0 {
-		return
-	}
-	builders := make([]*Builder, n)
-	for i := range builders {
-		builders[i] = &Builder{
-			buf:   make([]byte, 0, poolBufferSize),
-			first: true,
-		}
-	}
-	for _, b := range builders {
-		pool.Put(b)
+	for range n {
+		pool.Put(&Builder{buf: make([]byte, 0, poolBufferSize)})
 	}
 }

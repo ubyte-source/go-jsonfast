@@ -12,6 +12,8 @@
 //	data := b.Bytes()
 //	jsonfast.Release(b)
 //
+// The zero value of Builder is ready to use.
+//
 // # Pre-computed keys
 //
 //	var keyMessage = jsonfast.NewFieldKey("message")
@@ -21,16 +23,27 @@
 // string is safe. NewFieldKey caches the prefix verbatim and therefore
 // requires a safe-ASCII name (printable ASCII excluding '"' and '\\').
 //
+// # Numbers
+//
+// Float fields match encoding/json output: shortest round-trip form,
+// exponent notation for magnitudes below 1e-6 or at least 1e21, and
+// null for NaN and ±Inf. Integral floats in (-1e18, 1e18) are emitted
+// in exact integer form.
+//
 // # Scanning
 //
 // IterateFields, FindField, IterateArray, IterateStringArray parse JSON
-// structurally without building a DOM. The *String variants take a
+// structurally without building a DOM. IterateFields and IterateArray
+// return true only for a single complete value with at most trailing
+// whitespace; trailing commas and trailing content are rejected.
+// FindField stops at the first match. The *String variants take a
 // string input and alias its backing memory; slices/strings passed to
 // callbacks must not outlive the call (clone via strings.Clone to retain).
 //
 // Raw JSON value bytes returned by the scanners can be promoted to Go
 // values via DecodeString, DecodeBool, DecodeInt64, DecodeUint64, and
-// DecodeFloat64. Each returns ok=false on malformed input; the integer
+// DecodeFloat64. Each returns ok=false on malformed input; DecodeString
+// rejects raw control bytes and unescaped quotes, and the integer
 // decoders also reject fractional, exponent, leading '+', and
 // leading-zero forms.
 //
@@ -49,4 +62,11 @@
 //
 // BatchWriter appends JSON records separated by '\n' and implements
 // io.Writer (one record per Write) and io.WriterTo.
+//
+// # Portability
+//
+// The SWAR fast paths use a single unaligned 8-byte load on
+// architectures that support it (amd64, arm64, ppc64le, s390x) and a
+// byte-wise fallback elsewhere. Build with -tags=purego to force the
+// fallback on every architecture.
 package jsonfast

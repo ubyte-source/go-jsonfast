@@ -14,18 +14,18 @@
 
 ## Features
 
-- Zero-allocation Builder with `Acquire` / `Release` pool and `WarmPool` for pre-seeding.
+- Zero-allocation Builder with `Acquire` / `Release` pool and `WarmPool` for pre-seeding; the zero value is ready to use.
 - Pre-computed `FieldKey` for static field names (typed string, literal-constructible).
 - `io.Writer` / `io.WriterTo` on both `Builder` and `BatchWriter` for pipeline interop.
 - NDJSON `BatchWriter` with pool, pre-seed, and write sinks.
-- SWAR-accelerated string escape and scanner (`SkipValueAt`, `SkipStringAt`, `SkipBracedAt`).
-- Direct-scan `FindField`, `IterateFields`, `IterateArray`, `IterateStringArray` (zero-alloc borrow).
+- SWAR-accelerated string escape and scanner (`SkipValueAt`, `SkipStringAt`, `SkipBracedAt`); portable byte-wise fallback via `-tags=purego` or on alignment-strict architectures.
+- Direct-scan `FindField`, `IterateFields`, `IterateArray`, `IterateStringArray` (zero-alloc borrow); strict scanning — trailing commas and trailing content are rejected.
 - `FlattenObject` / `AddFlattenedMapField` for dot-notation flattening.
 - RFC 3339 time formatting without `time.Format` allocations, UTC-normalised.
-- RFC 8259 compliance: invalid UTF-8 → U+FFFD; NaN / ±Inf → `null`.
+- RFC 8259 compliance: invalid UTF-8 → U+FFFD (Unicode maximal-subpart, identical to `encoding/json`); NaN / ±Inf → `null`; float output byte-compatible with `encoding/json`.
 - `IsStructuralJSON` single-pass validator for untrusted payloads.
 - `testing.AllocsPerRun` CI gate: every hot path is asserted zero-alloc.
-- Native Go fuzzers for every scanner and validator.
+- Native Go fuzzers for every scanner and validator, plus `encoding/json` round-trip oracles.
 - Profile-guided optimisation: `default.pgo` tracked; `make pgo` regenerates.
 
 Requires **Go 1.25+**.
@@ -176,7 +176,8 @@ See the [package documentation](https://pkg.go.dev/github.com/ubyte-source/go-js
 | `AddStringArrayField(name, values)` | `"name":["v1","v2",...]` with escaping |
 | `AddIntField(name, v int)` | `"name":123` |
 | `AddInt64Field(name, v int64)` | `"name":123` |
-| `AddFloat64Field(name, v float64)` | `"name":3.14` — NaN/±Inf → `null` |
+| `AddUint64Field(name, v uint64)` | `"name":123` |
+| `AddFloat64Field(name, v float64)` | `"name":3.14` — encoding/json parity: 'e' notation for \|v\| < 1e-6 or ≥ 1e21; NaN/±Inf → `null` |
 | `AddBoolField(name, v bool)` | `"name":true` / `"name":false` |
 | `AddNullField(name)` | `"name":null` |
 | `AddTimeRFC3339Field(name, t time.Time)` | `"name":"YYYY-MM-DDThh:mm:ss[.fffffffff]Z"` |
@@ -225,15 +226,15 @@ emitted from the cached `FieldKey` instead of being escaped per call.
 
 | Function | Description |
 |----------|-------------|
-| `IterateFields(data []byte, fn) bool` | Callback for each `"key":value` pair. |
+| `IterateFields(data []byte, fn) bool` | Callback for each `"key":value` pair. True only for one complete object (trailing whitespace allowed); trailing commas/content rejected. |
 | `IterateFieldsString(s string, fn) bool` | Same, string input. |
-| `FindField(data []byte, key string) ([]byte, bool)` | Direct lookup without callback. |
+| `FindField(data []byte, key string) ([]byte, bool)` | Direct lookup without callback; stops at the first match. |
 | `FindFieldString(s, key string) ([]byte, bool)` | Same, string input. |
-| `IterateArray(data []byte, fn) bool` | Callback for each element. |
+| `IterateArray(data []byte, fn) bool` | Callback for each element. Same strictness as `IterateFields`. |
 | `IterateArrayString(s string, fn) bool` | Same, string input. |
-| `IterateStringArray(data []byte, fn func(val string) bool) bool` | Zero-alloc borrow; see lifetime note. |
+| `IterateStringArray(data []byte, fn func(val string) bool) bool` | Zero-alloc borrow of the raw string body (escapes not decoded); see lifetime note. |
 | `IterateStringArrayString(s string, fn) bool` | Same, string input. |
-| `FlattenObject(b *Builder, data []byte) bool` | Recursive flatten into builder (≤ 64 levels). |
+| `FlattenObject(b *Builder, data []byte) bool` | Recursive flatten into builder (≤ 64 levels). Leaf names only — colliding leaves produce duplicate keys. |
 | `SkipWS` / `SkipValueAt` / `SkipStringAt` / `SkipBracedAt` | Low-level SWAR scanners. |
 | `IsStructuralJSON(s string) bool` | Single-pass grammar validator with trailing-content rejection. |
 | `EscapeString(s string) string` | Returns s unchanged if already safe; allocates only when escape needed. |
@@ -250,7 +251,7 @@ slice into the corresponding Go value. They are typically composed with
 
 | Function | Description |
 |----------|-------------|
-| `DecodeString(raw []byte) (string, bool)` | Decodes a quoted JSON string, resolving escapes and surrogate pairs. |
+| `DecodeString(raw []byte) (string, bool)` | Decodes a quoted JSON string, resolving escapes and surrogate pairs. Rejects raw control bytes, unescaped quotes, and trailing content. |
 | `DecodeBool(raw []byte) (value, ok bool)` | Decodes the literal `true` / `false`. |
 | `DecodeInt64(raw []byte) (int64, bool)` | Strict integer: rejects fractional, exponent, leading `+`, and leading-zero forms (only `0` and `-0` accepted). |
 | `DecodeUint64(raw []byte) (uint64, bool)` | Same rules as `DecodeInt64`, plus rejects negative input. |
@@ -366,6 +367,8 @@ go-jsonfast/
 ├── jsonfast.go        # Builder: pool, field methods, escape, time, integer formatting
 ├── scan.go            # Scanner: Skip*, Iterate*, FindField, FlattenObject, IsStructuralJSON
 ├── swar.go            # SWAR constants and byte-classification helpers
+├── swar_unsafe.go     # Single unaligned 8-byte load (amd64/arm64/ppc64le/s390x)
+├── swar_purego.go     # Portable byte-wise load (other architectures or -tags=purego)
 ├── flatten.go         # FlattenMap and AddFlattenedMapField
 ├── ndjson.go          # BatchWriter: pool, append, io.Writer / io.WriterTo
 ├── doc.go             # Package documentation

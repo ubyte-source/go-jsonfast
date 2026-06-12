@@ -8,6 +8,7 @@ ci: vet lint test alloc cover bench
 # Run all tests with the race detector.
 test:
 	go test -v -race -count=1 ./...
+	go test -tags=purego -race -count=1 ./...
 
 # Run only the zero-allocation assertions. Fails if any hot path regresses.
 alloc:
@@ -33,6 +34,9 @@ fuzz:
 	go test -fuzz=FuzzIsStructuralJSON -fuzztime=$(FUZZTIME) ./...
 	go test -fuzz=FuzzIterateArray    -fuzztime=$(FUZZTIME) ./...
 	go test -fuzz=FuzzFlattenObject   -fuzztime=$(FUZZTIME) ./...
+	go test -fuzz=FuzzRoundTripStructuralJSON -fuzztime=$(FUZZTIME) ./...
+	go test -fuzz=FuzzRoundTripFindField      -fuzztime=$(FUZZTIME) ./...
+	go test -fuzz=FuzzFloat64Parity   -fuzztime=$(FUZZTIME) ./...
 
 # Run go vet.
 vet:
@@ -54,7 +58,7 @@ pgo:
 # Clean test cache and generated files.
 clean:
 	go clean -testcache
-	@rm -f coverage.out coverage.html *.prof
+	@rm -f coverage.out coverage.html *.prof *.test
 
 # Show test coverage.
 cover:

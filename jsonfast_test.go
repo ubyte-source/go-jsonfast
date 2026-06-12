@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -67,8 +68,8 @@ func TestBuilder_Reset(t *testing.T) {
 	if len(b.Bytes()) != 0 {
 		t.Errorf("Expected empty buffer after reset, got length %d", len(b.Bytes()))
 	}
-	if !b.first {
-		t.Error("Expected first=true after reset")
+	if b.needSep {
+		t.Error("Expected needSep=false after reset")
 	}
 }
 
@@ -82,6 +83,28 @@ func TestBuilder_Len(t *testing.T) {
 	if b.Len() != 2 {
 		t.Errorf("Expected Len()=2 for '{}', got %d", b.Len())
 	}
+}
+
+func TestBuilder_ZeroValue(t *testing.T) {
+	var b Builder
+	b.BeginObject()
+	b.AddStringField("k", "v")
+	b.AddIntField("n", 1)
+	b.EndObject()
+	expect(t, `{"k":"v","n":1}`, string(b.Bytes()))
+
+	var direct Builder
+	direct.AddStringField("first", "no-leading-comma")
+	expect(t, `"first":"no-leading-comma"`, string(direct.Bytes()))
+}
+
+func TestBuilder_AddUint64Field(t *testing.T) {
+	b := New(64)
+	b.BeginObject()
+	b.AddUint64Field("small", 7)
+	b.AddUint64Field("max", math.MaxUint64)
+	b.EndObject()
+	expect(t, `{"small":7,"max":18446744073709551615}`, string(b.Bytes()))
 }
 
 func TestBuilder_Grow(t *testing.T) {
@@ -392,6 +415,65 @@ func TestBuilder_AddFloat64Field_NaN(t *testing.T) {
 	b.AddFloat64Field("v", nanValue)
 	b.EndObject()
 	expect(t, `{"v":null}`, string(b.Bytes()))
+}
+
+func TestBuilder_AddFloat64Field_StdlibParity(t *testing.T) {
+	// Byte-for-byte parity with encoding/json outside the exact-integer
+	// fast path; the corpus exercises the 'e' format and exponent trim.
+	values := []float64{
+		math.Copysign(0, -1), 3.14, -2.5, 0.001, 123456.789,
+		1e-6, 1e-7, 1.5e-7, 9.9e-9, -1e-7,
+		1e21, 2.5e21, -1e21, 1e308, math.MaxFloat64,
+		5e-324, math.SmallestNonzeroFloat64,
+	}
+	for _, v := range values {
+		want, err := json.Marshal(v)
+		if err != nil {
+			t.Fatalf("json.Marshal(%g): %v", v, err)
+		}
+		b := New(64)
+		b.appendFloat64(v)
+		if got := string(b.Bytes()); got != string(want) {
+			t.Errorf("appendFloat64(%g) = %s, want %s", v, got, want)
+		}
+	}
+}
+
+func TestBuilder_AddFloat64Field_RoundTrip(t *testing.T) {
+	// Large integral floats use the exact-integer form, which may
+	// differ textually from stdlib's shortest form but must round-trip.
+	values := []float64{
+		float64(int64(1) << 60), 1e17, -123456789123456784, 987654321.0,
+	}
+	for _, v := range values {
+		b := New(64)
+		b.appendFloat64(v)
+		out := string(b.Bytes())
+		got, err := strconv.ParseFloat(out, 64)
+		if err != nil || got != v {
+			t.Errorf("appendFloat64(%g) = %s, parse-back %g err=%v", v, out, got, err)
+		}
+		if !json.Valid(b.Bytes()) {
+			t.Errorf("appendFloat64(%g) = %s is not valid JSON", v, out)
+		}
+	}
+}
+
+func TestBuilder_AddFloat64Field_NegativeZero(t *testing.T) {
+	b := New(32)
+	b.BeginObject()
+	b.AddFloat64Field("v", math.Copysign(0, -1))
+	b.EndObject()
+	expect(t, `{"v":-0}`, string(b.Bytes()))
+}
+
+func TestBuilder_AddFloat64Field_ExtremesUseExponent(t *testing.T) {
+	b := New(64)
+	b.AddFloat64Field("v", 1e308)
+	if got := string(b.Bytes()); len(got) > 16 {
+		t.Errorf("expected compact exponent form for 1e308, got %d bytes: %s", len(got), got)
+	}
+	assertContains(t, string(b.Bytes()), `1e+308`)
 }
 
 func TestBuilder_AddFloat64Field_PosInf(t *testing.T) {
@@ -778,7 +860,7 @@ func TestEscapeMultiByte_TruncatedUTF8_4byte(t *testing.T) {
 	assertContains(t, string(b.Bytes()), "\xef\xbf\xbd")
 }
 
-func TestEscapeMultiByte_InvalidContinuation(t *testing.T) {
+func TestEscapeInvalidContinuationByte(t *testing.T) {
 	b := New(64)
 	b.BeginObject()
 	b.AddStringField("k", string([]byte{0xC2, 0x00}))
@@ -814,38 +896,49 @@ func TestEscapeMultiByte_InvalidLeadByte0xF8(t *testing.T) {
 	assertContains(t, string(b.Bytes()), "\xef\xbf\xbd")
 }
 
-func TestUtf8SeqLen(t *testing.T) {
-	cases := []struct {
-		in   byte
-		want int
-	}{
-		{0xC2, 2}, {0xE0, 3}, {0xF0, 4}, {0xF4, 4},
-		{0x80, 0}, {0xF8, 0}, {0xFF, 0},
-		{0xC0, 0}, {0xC1, 0}, // overlong 2-byte leaders
-		{0xF5, 0}, {0xF6, 0}, {0xF7, 0}, // above U+10FFFF
+func TestUTF8ReplacementParity_Stdlib(t *testing.T) {
+	// Black-box parity with encoding/json on malformed UTF-8: identical
+	// replacement-character count and decoded output, including the
+	// Unicode maximal-subpart policy (overlongs emit one U+FFFD per byte).
+	inputs := []string{
+		string([]byte{0xC2}),                   // truncated 2-byte
+		string([]byte{0xE0, 0x80}),             // truncated 3-byte
+		string([]byte{0xF0, 0x90, 0x80}),       // truncated 4-byte
+		string([]byte{0x80}),                   // bare continuation
+		string([]byte{0xF8}),                   // invalid lead byte
+		string([]byte{0xC2, 0x00}),             // invalid continuation
+		string([]byte{0xC0, 0x80}),             // 2-byte overlong
+		string([]byte{0xC1, 0xBF}),             // 2-byte overlong
+		string([]byte{0xE0, 0x80, 0x80}),       // 3-byte overlong
+		string([]byte{0xE0, 0x9F, 0xBF}),       // 3-byte overlong
+		string([]byte{0xED, 0xA0, 0x80}),       // surrogate
+		string([]byte{0xF0, 0x80, 0x80, 0x80}), // 4-byte overlong
+		string([]byte{0xF0, 0x8F, 0xBF, 0xBF}), // 4-byte overlong
+		string([]byte{0xF4, 0x90, 0x80, 0x80}), // above U+10FFFF
+		string([]byte{0xF5, 0x80, 0x80, 0x80}), // invalid leader
+		"ok\xffmixed\xC2text",
 	}
-	for _, c := range cases {
-		if got := utf8SeqLen(c.in); got != c.want {
-			t.Errorf("utf8SeqLen(0x%02X) = %d, want %d", c.in, got, c.want)
+	for _, in := range inputs {
+		b := New(64)
+		b.buf = append(b.buf, '"')
+		b.escapeString(in)
+		b.buf = append(b.buf, '"')
+
+		var got string
+		if err := json.Unmarshal(b.Bytes(), &got); err != nil {
+			t.Fatalf("input %x: invalid JSON %s: %v", in, b.Bytes(), err)
 		}
-	}
-}
-
-func TestValidContinuation(t *testing.T) {
-	if !validContinuation("é", 0, 2) { // C3 A9
-		t.Error("expected valid for 'é'")
-	}
-	if validContinuation(string([]byte{0xC2, 0x00}), 0, 2) {
-		t.Error("expected invalid for 0xC2 0x00")
-	}
-}
-
-func TestValidContinuation_OverlongRejection(t *testing.T) {
-	if !validContinuation(string([]byte{0xE0, 0x80, 0x80}), 0, 3) {
-		t.Error("expected valid continuation bytes for E0 80 80")
-	}
-	if validContinuation(string([]byte{0xE0, 0x00, 0x80}), 0, 3) {
-		t.Error("expected invalid for E0 00 80 (non-continuation)")
+		wantJSON, err := json.Marshal(in)
+		if err != nil {
+			t.Fatalf("input %x: %v", in, err)
+		}
+		var want string
+		if err := json.Unmarshal(wantJSON, &want); err != nil {
+			t.Fatalf("input %x: %v", in, err)
+		}
+		if got != want {
+			t.Errorf("input %x: decoded %q, encoding/json decodes %q", in, got, want)
+		}
 	}
 }
 
@@ -1497,58 +1590,25 @@ func FuzzEscapeString(f *testing.F) {
 		jsonStr := `"` + escaped + `"`
 		var parsed string
 		if err := json.Unmarshal([]byte(jsonStr), &parsed); err != nil {
-			t.Errorf("EscapeString(%q) produced invalid JSON: %v\njsonStr: %s", s, err, jsonStr)
+			t.Fatalf("EscapeString(%q) produced invalid JSON: %v\njsonStr: %s", s, err, jsonStr)
 		}
 		if !utf8.ValidString(escaped) {
-			t.Errorf("EscapeString(%q) produced invalid UTF-8", s)
+			t.Fatalf("EscapeString(%q) produced invalid UTF-8", s)
+		}
+		// Decoded-value parity with encoding/json, including U+FFFD
+		// replacement of invalid sequences (maximal-subpart policy).
+		wantJSON, err := json.Marshal(s)
+		if err != nil {
+			t.Fatalf("json.Marshal(%q): %v", s, err)
+		}
+		var want string
+		if err := json.Unmarshal(wantJSON, &want); err != nil {
+			t.Fatalf("json.Unmarshal(%s): %v", wantJSON, err)
+		}
+		if parsed != want {
+			t.Fatalf("EscapeString(%q) decodes to %q; encoding/json round-trips to %q", s, parsed, want)
 		}
 	})
-}
-
-// ---------------------------------------------------------------------------
-// validContinuation edge cases
-// ---------------------------------------------------------------------------
-
-func TestValidContinuation_Size2_Invalid(t *testing.T) {
-	s := string([]byte{0xC2, 0x00})
-	if validContinuation(s, 0, 2) {
-		t.Error("expected false for bad 2-byte continuation")
-	}
-}
-
-func TestValidContinuation_Size3_Invalid(t *testing.T) {
-	s := string([]byte{0xE0, 0x80, 0x00})
-	if validContinuation(s, 0, 3) {
-		t.Error("expected false for bad 3-byte continuation")
-	}
-	s = string([]byte{0xE0, 0x00, 0x80})
-	if validContinuation(s, 0, 3) {
-		t.Error("expected false for bad 3-byte first continuation")
-	}
-}
-
-func TestValidContinuation_Size4_Invalid(t *testing.T) {
-	cases := [][]byte{
-		{0xF0, 0x00, 0x80, 0x80},
-		{0xF0, 0x80, 0x00, 0x80},
-		{0xF0, 0x80, 0x80, 0x00},
-	}
-	for i, c := range cases {
-		s := string(c)
-		if validContinuation(s, 0, 4) {
-			t.Errorf("case %d: expected false", i)
-		}
-	}
-}
-
-func TestValidContinuation_InvalidSize(t *testing.T) {
-	s := "abcde"
-	if validContinuation(s, 0, 5) {
-		t.Error("expected false for invalid size")
-	}
-	if validContinuation(s, 0, 1) {
-		t.Error("expected false for size 1")
-	}
 }
 
 // ---------------------------------------------------------------------------
@@ -1599,11 +1659,13 @@ func TestEscapeString_LongNeedsEscape(t *testing.T) {
 // civilDate edge cases
 // ---------------------------------------------------------------------------
 
-func TestCivilDate_NegativeTimestamp(t *testing.T) {
-	y, m, d := civilDate(-1)
-	if y != 1970 || m != 1 || d != 1 {
-		t.Errorf("got %d-%d-%d, want 1970-1-1", y, m, d)
-	}
+func TestCivilDate_NegativeTimestampClampedByCaller(t *testing.T) {
+	// civilDate requires non-negative input; the public path clamps.
+	b := New(64)
+	b.BeginObject()
+	b.AddTimeRFC3339Field("t", time.Unix(-1, 0))
+	b.EndObject()
+	expect(t, `{"t":"1970-01-01T00:00:00Z"}`, string(b.Bytes()))
 }
 
 func TestCivilDate_Epoch(t *testing.T) {

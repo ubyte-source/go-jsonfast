@@ -197,3 +197,23 @@ func BenchmarkSwarSpecialSkip(b *testing.B) {
 		swarSpecialSkip(w)
 	}
 }
+
+// load64 correctness: the SWAR predicates only test per-byte membership,
+// so any byte permutation works — but both implementations must agree
+// with a defined reference on every offset, including unaligned ones.
+func TestLoad64_MatchesReference(t *testing.T) {
+	buf := make([]byte, 64)
+	for i := range buf {
+		buf[i] = byte(i*7 + 13)
+	}
+	s := string(buf)
+	for j := 0; j+8 <= len(buf); j++ {
+		want := binary.LittleEndian.Uint64(buf[j : j+8])
+		if got := load64(buf, j); got != want {
+			t.Fatalf("load64(buf, %d) = %#x, want %#x", j, got, want)
+		}
+		if got := load64String(s, j); got != want {
+			t.Fatalf("load64String(s, %d) = %#x, want %#x", j, got, want)
+		}
+	}
+}

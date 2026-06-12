@@ -106,14 +106,7 @@ func ReleaseBatchWriter(bw *BatchWriter) {
 
 // WarmBatchWriterPool pre-allocates n BatchWriters and returns them to the pool.
 func WarmBatchWriterPool(n int) {
-	if n <= 0 {
-		return
-	}
-	writers := make([]*BatchWriter, n)
-	for i := range writers {
-		writers[i] = &BatchWriter{buf: make([]byte, 0, batchWriterPoolBufferSize)}
-	}
-	for _, bw := range writers {
-		batchWriterPool.Put(bw)
+	for range n {
+		batchWriterPool.Put(&BatchWriter{buf: make([]byte, 0, batchWriterPoolBufferSize)})
 	}
 }

@@ -3,6 +3,8 @@ package jsonfast
 import (
 	"bytes"
 	"encoding/json"
+	"math"
+	"strconv"
 	"testing"
 )
 
@@ -220,4 +222,55 @@ func FuzzRoundTripFindField(f *testing.F) {
 			}
 		}
 	})
+}
+
+// FuzzFloat64Parity asserts appendFloat64 emits valid JSON that
+// round-trips to the same float64, and that non-integral output is
+// byte-identical to encoding/json.
+func FuzzFloat64Parity(f *testing.F) {
+	f.Add(0.0)
+	f.Add(math.Copysign(0, -1))
+	f.Add(3.14)
+	f.Add(1e-7)
+	f.Add(1e21)
+	f.Add(math.MaxFloat64)
+	f.Add(math.SmallestNonzeroFloat64)
+	f.Add(float64(1 << 60))
+	f.Fuzz(func(t *testing.T, v float64) {
+		b := New(64)
+		b.appendFloat64(v)
+		assertFloat64Output(t, v, b.Bytes())
+	})
+}
+
+func assertFloat64Output(t *testing.T, v float64, out []byte) {
+	t.Helper()
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		if string(out) != "null" {
+			t.Fatalf("appendFloat64(%g) = %s, want null", v, out)
+		}
+		return
+	}
+	if !json.Valid(out) {
+		t.Fatalf("appendFloat64(%g) = %s is not valid JSON", v, out)
+	}
+	back, err := strconv.ParseFloat(string(out), 64)
+	if err != nil || back != v {
+		t.Fatalf("appendFloat64(%g) = %s, parse-back %g err=%v", v, out, back, err)
+	}
+	assertFloat64StdlibParity(t, v, out)
+}
+
+func assertFloat64StdlibParity(t *testing.T, v float64, out []byte) {
+	t.Helper()
+	if iv := int64(v); v > -1e18 && v < 1e18 && float64(iv) == v {
+		return // exact-integer fast path may differ textually from stdlib
+	}
+	want, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("json.Marshal(%g): %v", v, err)
+	}
+	if !bytes.Equal(out, want) {
+		t.Fatalf("appendFloat64(%g) = %s, encoding/json = %s", v, out, want)
+	}
 }

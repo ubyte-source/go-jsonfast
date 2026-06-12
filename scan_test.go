@@ -1,6 +1,9 @@
 package jsonfast
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestSkipWS(t *testing.T) {
 	tests := []struct {
@@ -332,10 +335,31 @@ func TestDecodeString_AllCodepointSizes(t *testing.T) {
 	}
 }
 
+func TestDecodeString_StrictRejections(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  []byte
+	}{
+		{"raw_control_byte", []byte("\"a\x01b\"")},
+		{"raw_newline", []byte("\"a\nb\"")},
+		{"embedded_quote", []byte(`"ab"cd"`)},
+		{"trailing_content", []byte(`"ab" `)},
+		{"leading_content", []byte(` "ab"`)},
+		{"nil_input", nil},
+		{"lone_quote", []byte(`"`)},
+		{"not_a_string", []byte(`123`)},
+	}
+	for _, tt := range cases {
+		if got, ok := DecodeString(tt.raw); ok {
+			t.Errorf("%s: expected rejection, got %q", tt.name, got)
+		}
+	}
+}
+
 func TestRelease_NilGuard(_ *testing.T)            { Release(nil) }
 func TestReleaseBatchWriter_NilGuard(_ *testing.T) { ReleaseBatchWriter(nil) }
 
-func TestCompareCodepoint1_Mismatch(t *testing.T) {
+func TestFindField_EscapedKey_AsciiCodepointMismatch(t *testing.T) {
 	data := []byte(`{"\u0041":1}`)
 	if _, ok := FindField(data, "B"); ok {
 		t.Error("expected no match for 1-byte codepoint mismatch")
@@ -352,6 +376,14 @@ func TestDecodeString_BackslashAtEOF(t *testing.T) {
 	raw := []byte{'"', 'a', '\\', '"'}
 	if _, ok := DecodeString(raw); ok {
 		t.Error("expected DecodeString to reject a body ending in lone backslash")
+	}
+}
+
+func TestAppendDecoded_LoneTrailingBackslash(t *testing.T) {
+	// Defensive guard: DecodeString pre-validates with SkipStringAt, so
+	// appendDecoded can only see this from a future internal caller.
+	if _, ok := appendDecoded(nil, []byte(`a\`)); ok {
+		t.Error("expected appendDecoded to reject a lone trailing backslash")
 	}
 }
 
@@ -481,6 +513,8 @@ func TestIterateFields_MalformedCases(t *testing.T) {
 	}{
 		{"empty", ""},
 		{"not_object", `"string"`},
+		{"bare_brace", `{`},
+		{"brace_then_ws", `{ `},
 		{"missing_key_quote", `{abc:"val"}`},
 		{"truncated_key", `{"`},
 		{"missing_colon", `{"key" "val"}`},
@@ -490,11 +524,28 @@ func TestIterateFields_MalformedCases(t *testing.T) {
 		{"truncated_after_value", `{"a":1`},
 		{"truncated_after_comma", `{"a":1,`},
 		{"truncated_mid_key", `{"a":1,"`},
+		{"trailing_comma", `{"a":1,}`},
+		{"trailing_comma_ws", `{"a":1, }`},
+		{"comma_only", `{,}`},
+		{"trailing_garbage", `{"a":1} x`},
+		{"trailing_brace", `{"a":1}}`},
+		{"second_object", `{"a":1}{"b":2}`},
 	}
 	for _, tt := range cases {
 		if IterateFields([]byte(tt.data), nop) {
 			t.Errorf("%s: expected false", tt.name)
 		}
+	}
+}
+
+func TestIterateFields_TrailingWhitespaceAccepted(t *testing.T) {
+	count := 0
+	ok := IterateFields([]byte(" {\"a\":1} \n\t"), func(_, _ []byte) bool {
+		count++
+		return true
+	})
+	if !ok || count != 1 {
+		t.Errorf("expected ok=true count=1, got ok=%v count=%d", ok, count)
 	}
 }
 
@@ -549,6 +600,8 @@ func TestFindField_MalformedCases(t *testing.T) {
 		{"truncated_after_comma", `{"a":1,`, "b"},
 		{"truncated_after_value", `{"a":1`, "b"},
 		{"key_not_found_at_end", testJSONObjA1, "b"},
+		{"trailing_comma", `{"a":1,}`, "b"},
+		{"comma_only", `{,}`, "a"},
 	}
 	for _, tt := range cases {
 		val, ok := FindField([]byte(tt.data), tt.key)
@@ -570,6 +623,14 @@ func TestFindField_EmptyObject(t *testing.T) {
 	_, ok := FindField([]byte(`{}`), "k")
 	if ok {
 		t.Error("expected false for empty object")
+	}
+}
+
+func TestFindField_FirstMatchStopsBeforeMalformedTail(t *testing.T) {
+	// FindField is first-match: content after the match is never scanned.
+	val, ok := FindField([]byte(`{"a":1,}`), "a")
+	if !ok || string(val) != "1" {
+		t.Errorf("got %q,%v, want 1,true", val, ok)
 	}
 }
 
@@ -694,6 +755,19 @@ func TestFlattenObject_Malformed(t *testing.T) {
 	b.BeginObject()
 	if FlattenObject(b, []byte(`{broken`)) {
 		t.Error("expected false for malformed JSON")
+	}
+}
+
+func TestFlattenObject_TrailingContent(t *testing.T) {
+	b := New(64)
+	b.BeginObject()
+	if FlattenObject(b, []byte(`{"a":1} junk`)) {
+		t.Error("expected false for trailing content")
+	}
+	b.Reset()
+	b.BeginObject()
+	if !FlattenObject(b, []byte(" {\"a\":1} \n")) {
+		t.Error("expected true for trailing whitespace")
 	}
 }
 
@@ -854,6 +928,43 @@ func TestSkipStringAt_LongStringWithEscape(t *testing.T) {
 	end, ok := SkipStringAt(data, 0)
 	if !ok || end != len(data) {
 		t.Errorf("got end=%d ok=%v, want end=%d ok=true", end, ok, len(data))
+	}
+}
+
+func TestSkipStringAt_ResumesBulkAfterEscape(t *testing.T) {
+	// Escape early, then a long safe run: the scanner must re-enter the
+	// SWAR bulk path and still terminate exactly at the closing quote.
+	long := strings.Repeat("x", 256)
+	data := []byte(`"ab\"` + long + `"`)
+	end, ok := SkipStringAt(data, 0)
+	if !ok || end != len(data) {
+		t.Errorf("got end=%d ok=%v, want end=%d ok=true", end, ok, len(data))
+	}
+
+	// Dense escapes interleaved with words.
+	data = []byte(`"\\\\\\\\` + long + `\t` + long + `"`)
+	end, ok = SkipStringAt(data, 0)
+	if !ok || end != len(data) {
+		t.Errorf("dense: got end=%d ok=%v, want end=%d ok=true", end, ok, len(data))
+	}
+
+	// Escape as the very last content byte before the closing quote.
+	data = []byte(`"` + long + `\n"`)
+	end, ok = SkipStringAt(data, 0)
+	if !ok || end != len(data) {
+		t.Errorf("tail-escape: got end=%d ok=%v, want end=%d ok=true", end, ok, len(data))
+	}
+
+	// Escape at EOF after a long run must fail.
+	data = []byte(`"` + long + `\`)
+	if _, ok = SkipStringAt(data, 0); ok {
+		t.Error("expected false for lone backslash at EOF after long run")
+	}
+
+	// Control byte after a resumed bulk section must fail.
+	data = []byte(`"a\t` + long + "\x01" + `"`)
+	if _, ok = SkipStringAt(data, 0); ok {
+		t.Error("expected false for control byte after escape resume")
 	}
 }
 
@@ -1060,12 +1171,26 @@ func TestIterateArray_Malformed(t *testing.T) {
 		{"empty_string", ``},
 		{"just_bracket", `[`},
 		{"truncated_value", `["`},
+		{"trailing_comma", `[1,]`},
+		{"trailing_garbage", `[1] x`},
+		{"second_array", `[1][2]`},
 	}
 	for _, tt := range cases {
 		ok := IterateArray([]byte(tt.data), func(_ []byte) bool { return true })
 		if ok {
 			t.Errorf("%s: expected false", tt.name)
 		}
+	}
+}
+
+func TestIterateArray_TrailingWhitespaceAccepted(t *testing.T) {
+	count := 0
+	ok := IterateArray([]byte(" [1,2] \n"), func(_ []byte) bool {
+		count++
+		return true
+	})
+	if !ok || count != 2 {
+		t.Errorf("expected ok=true count=2, got ok=%v count=%d", ok, count)
 	}
 }
 

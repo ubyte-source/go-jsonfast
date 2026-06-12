@@ -1,8 +1,9 @@
 package jsonfast
 
 import (
-	"slices"
+	"bytes"
 	"strconv"
+	"unicode/utf8"
 	"unsafe"
 )
 
@@ -144,44 +145,38 @@ func SkipStringAt(data []byte, i int) (int, bool) {
 		return i, false
 	}
 	n := len(data)
-	j := swarSkipStringBulk(data, i+1, n)
-	return scanStringTail(data, j, n)
+	j := i + 1
+bulk:
+	for {
+		j = swarSkipStringBulk(data, j, n)
+		for j < n {
+			switch c := data[j]; {
+			case c == '"':
+				return j + 1, true
+			case c == '\\':
+				if j+1 >= n {
+					return j, false
+				}
+				j += 2
+				continue bulk // resume SWAR after the escape
+			case c < 0x20:
+				return j, false
+			default:
+				j++
+			}
+		}
+		return j, false
+	}
 }
 
-//nolint:gosec // unsafe pointer math is load-bearing for SWAR throughput
 func swarSkipStringBulk(data []byte, j, n int) int {
-	if n-j < 8 {
-		return j
-	}
-	p := unsafe.Pointer(unsafe.SliceData(data))
 	for j+8 <= n {
-		w := *(*uint64)(unsafe.Add(p, j))
-		if swarSpecialSkip(w) != 0 {
-			return j
+		if swarSpecialSkip(load64(data, j)) != 0 {
+			break
 		}
 		j += 8
 	}
 	return j
-}
-
-func scanStringTail(data []byte, j, n int) (int, bool) {
-	for j < n {
-		c := data[j]
-		switch {
-		case c == '"':
-			return j + 1, true
-		case c == '\\':
-			if j+1 >= n {
-				return j, false
-			}
-			j += 2
-		case c < 0x20:
-			return j, false
-		default:
-			j++
-		}
-	}
-	return j, false
 }
 
 // SkipBracedAt skips a balanced opener/closer pair starting at data[i].
@@ -199,14 +194,25 @@ func SkipBracedAt(data []byte, i int, opener, closer byte) (int, bool) {
 		if i >= n {
 			break
 		}
-		next, done, ok := stepBraced(data, i, opener, closer, &depth)
-		if !ok {
-			return i, false
+		c := data[i]
+		if c == '"' {
+			end, ok := SkipStringAt(data, i)
+			if !ok {
+				return i, false
+			}
+			i = end
+			continue
 		}
-		if done {
-			return next, true
+		i++
+		switch c {
+		case opener:
+			depth++
+		case closer:
+			depth--
+			if depth == 0 {
+				return i, true
+			}
 		}
-		i = next
 	}
 	return i, false
 }
@@ -223,36 +229,9 @@ func swarBroadcastPair(opener, closer byte) (openMask, closeMask uint64) {
 	return swarLo * uint64(opener), swarLo * uint64(closer)
 }
 
-func stepBraced(data []byte, i int, opener, closer byte, depth *int) (next int, done, ok bool) {
-	switch data[i] {
-	case '"':
-		end, sok := SkipStringAt(data, i)
-		if !sok {
-			return i, false, false
-		}
-		return end, false, true
-	case opener:
-		*depth++
-		return i + 1, false, true
-	case closer:
-		*depth--
-		if *depth == 0 {
-			return i + 1, true, true
-		}
-		return i + 1, false, true
-	default:
-		return i + 1, false, true
-	}
-}
-
-//nolint:gosec // unsafe pointer math is load-bearing for SWAR throughput
 func swarSkipBracedBulk(data []byte, i, n int, swarOpener, swarCloser uint64) int {
-	if n-i < 8 {
-		return i
-	}
-	p := unsafe.Pointer(unsafe.SliceData(data))
 	for i+8 <= n {
-		w := *(*uint64)(unsafe.Add(p, i))
+		w := load64(data, i)
 		xq := w ^ swarQuote
 		xb := w ^ swarBackslash
 		xo := w ^ swarOpener
@@ -262,30 +241,42 @@ func swarSkipBracedBulk(data []byte, i, n int, swarOpener, swarCloser uint64) in
 			(xo-swarLo)&^xo&swarHi |
 			(xc-swarLo)&^xc&swarHi
 		if hasSpecial != 0 {
-			return i
+			break
 		}
 		i += 8
 	}
 	return i
 }
 
-// iterateRawFields walks a JSON object, invoking fn for each field.
-// Returns the index past '}' and whether the scan completed.
-func iterateRawFields(data []byte, fn func(d []byte, ks, ke, vs, ve int) bool) (end int, ok bool) {
+// openObject consumes '{' and whitespace. empty=true if the object is
+// {} (next points past '}'); otherwise next is the first field's byte.
+func openObject(data []byte) (next int, empty, ok bool) {
 	i := SkipWS(data, 0)
 	if i >= len(data) || data[i] != '{' {
+		return i, false, false
+	}
+	i = SkipWS(data, i+1)
+	if i >= len(data) {
+		return i, false, false
+	}
+	if data[i] == '}' {
+		return i + 1, true, true
+	}
+	return i, false, true
+}
+
+// iterateRawFields walks a JSON object, invoking fn for each field.
+// Returns the index past '}' and whether the scan completed. Trailing
+// commas are rejected.
+func iterateRawFields(data []byte, fn func(d []byte, ks, ke, vs, ve int) bool) (end int, ok bool) {
+	i, empty, ook := openObject(data)
+	if !ook {
 		return i, false
 	}
-	i++
-
+	if empty {
+		return i, true
+	}
 	for {
-		i = SkipWS(data, i)
-		if i >= len(data) {
-			return i, false
-		}
-		if data[i] == '}' {
-			return i + 1, true
-		}
 		fp, next, pok := parseField(data, i)
 		if !pok {
 			return next, false
@@ -339,6 +330,8 @@ func parseField(data []byte, i int) (fieldPos, int, bool) {
 }
 
 // stepAfterField consumes whitespace and the ',' or '}' after a value.
+// After a comma, next points at the first byte of the following field
+// (whitespace skipped) and is validated to be in range.
 func stepAfterField(data []byte, i int) (next int, done, ok bool) {
 	i = SkipWS(data, i)
 	if i >= len(data) {
@@ -346,7 +339,8 @@ func stepAfterField(data []byte, i int) (next int, done, ok bool) {
 	}
 	switch data[i] {
 	case ',':
-		return i + 1, false, true
+		next = SkipWS(data, i+1)
+		return next, false, next < len(data)
 	case '}':
 		return i + 1, true, true
 	default:
@@ -354,13 +348,17 @@ func stepAfterField(data []byte, i int) (next int, done, ok bool) {
 	}
 }
 
-// IterateFields calls fn for each top-level field. key includes the
-// surrounding quotes; value is the raw JSON bytes.
+// IterateFields calls fn for each top-level field of the JSON object
+// in data. key includes the surrounding quotes; value is the raw JSON
+// bytes. It returns true only when data holds exactly one complete
+// object (trailing whitespace allowed) and fn never returned false.
+// Values are structurally balanced but not grammar-validated; promote
+// them with the Decode* helpers or check with IsStructuralJSON.
 func IterateFields(data []byte, fn func(key, value []byte) bool) bool {
-	_, ok := iterateRawFields(data, func(d []byte, ks, ke, vs, ve int) bool {
+	end, ok := iterateRawFields(data, func(d []byte, ks, ke, vs, ve int) bool {
 		return fn(d[ks:ke], d[vs:ve])
 	})
-	return ok
+	return ok && SkipWS(data, end) == len(data)
 }
 
 // IterateFieldsString is IterateFields with a string input. The slices
@@ -377,18 +375,14 @@ func IterateFieldsString(s string, fn func(key, value []byte) bool) bool {
 
 // FindField returns the raw value bytes for the first top-level field
 // matching key, or (nil, false) if not found. Keys with JSON escape
-// sequences are decoded on the fly.
+// sequences are decoded on the fly. The scan stops at the first match,
+// so malformed content after it is not detected.
 func FindField(data []byte, key string) ([]byte, bool) {
-	i := SkipWS(data, 0)
-	if i >= len(data) || data[i] != '{' {
+	i, empty, ok := openObject(data)
+	if !ok || empty {
 		return nil, false
 	}
-	i++
 	for {
-		i = SkipWS(data, i)
-		if atObjectEnd(data, i) {
-			return nil, false
-		}
 		fp, next, pok := parseField(data, i)
 		if !pok {
 			return nil, false
@@ -402,10 +396,6 @@ func FindField(data []byte, key string) ([]byte, bool) {
 		}
 		i = nx
 	}
-}
-
-func atObjectEnd(data []byte, i int) bool {
-	return i >= len(data) || data[i] == '}'
 }
 
 func matchesKey(data []byte, fp fieldPos, key string) bool {
@@ -422,7 +412,7 @@ func matchesKey(data []byte, fp fieldPos, key string) bool {
 }
 
 func bytesContainBackslash(raw []byte) bool {
-	return slices.Contains(raw, '\\')
+	return bytes.IndexByte(raw, '\\') >= 0
 }
 
 // decodeKeyEqual walks enc while decoding escapes, comparing each
@@ -536,57 +526,12 @@ func parseHex4(b []byte) (rune, bool) {
 // compareCodepoint checks whether key[j:] begins with the UTF-8
 // encoding of r and returns the number of key bytes consumed.
 func compareCodepoint(r rune, key string, j int) (int, bool) {
-	switch {
-	case r < 0x80:
-		return compareCodepoint1(r, key, j)
-	case r < 0x800:
-		return compareCodepoint2(r, key, j)
-	case r < 0x10000:
-		return compareCodepoint3(r, key, j)
-	default:
-		return compareCodepoint4(r, key, j)
-	}
-}
-
-// utf8Byte returns byte(r & 0xFF); the mask makes the conversion
-// provably safe for gosec.
-func utf8Byte(r rune) byte { return byte(r & 0xFF) }
-
-func compareCodepoint1(r rune, key string, j int) (int, bool) {
-	if j >= len(key) || key[j] != utf8Byte(r) {
+	var enc [utf8.UTFMax]byte
+	n := utf8.EncodeRune(enc[:], r)
+	if j+n > len(key) || key[j:j+n] != string(enc[:n]) {
 		return 0, false
 	}
-	return 1, true
-}
-
-func compareCodepoint2(r rune, key string, j int) (int, bool) {
-	if j+2 > len(key) ||
-		key[j] != utf8Byte(0xC0|r>>6) ||
-		key[j+1] != utf8Byte(0x80|r&0x3F) {
-		return 0, false
-	}
-	return 2, true
-}
-
-func compareCodepoint3(r rune, key string, j int) (int, bool) {
-	if j+3 > len(key) ||
-		key[j] != utf8Byte(0xE0|r>>12) ||
-		key[j+1] != utf8Byte(0x80|(r>>6)&0x3F) ||
-		key[j+2] != utf8Byte(0x80|r&0x3F) {
-		return 0, false
-	}
-	return 3, true
-}
-
-func compareCodepoint4(r rune, key string, j int) (int, bool) {
-	if j+4 > len(key) ||
-		key[j] != utf8Byte(0xF0|r>>18) ||
-		key[j+1] != utf8Byte(0x80|(r>>12)&0x3F) ||
-		key[j+2] != utf8Byte(0x80|(r>>6)&0x3F) ||
-		key[j+3] != utf8Byte(0x80|r&0x3F) {
-		return 0, false
-	}
-	return 4, true
+	return n, true
 }
 
 // FindFieldString is FindField with a string input. The returned slice
@@ -605,7 +550,10 @@ func FindFieldString(s, key string) ([]byte, bool) {
 const maxFlattenDepth = 64
 
 // FlattenObject recursively flattens a JSON object's leaves into b (up
-// to 64 levels deep). Non-object input is skipped silently.
+// to 64 levels deep), discarding the enclosing keys: nested leaves are
+// emitted under their own names, so colliding leaf names produce
+// duplicate keys. Non-object input is skipped silently; trailing
+// content after the object is rejected.
 func FlattenObject(b *Builder, data []byte) bool {
 	return flattenObject(b, data, 0)
 }
@@ -619,7 +567,7 @@ func flattenObject(b *Builder, data []byte, depth int) bool {
 		return true
 	}
 	callbackOK := true
-	_, parseOK := iterateRawFields(data, func(d []byte, ks, ke, vs, ve int) bool {
+	end, parseOK := iterateRawFields(data, func(d []byte, ks, ke, vs, ve int) bool {
 		valueRaw := d[vs:ve]
 		if len(valueRaw) > 0 && valueRaw[0] == '{' {
 			if !flattenObject(b, valueRaw, depth+1) {
@@ -631,7 +579,7 @@ func flattenObject(b *Builder, data []byte, depth int) bool {
 		b.AddRawBytesField(d[ks+1:ke-1], valueRaw)
 		return true
 	})
-	return parseOK && callbackOK
+	return parseOK && callbackOK && SkipWS(data, end) == len(data)
 }
 
 // iterateRawArray walks a JSON array, invoking fn for each element.
@@ -696,16 +644,21 @@ func stepAfterArrayElement(data []byte, i int) (next int, done, ok bool) {
 	}
 }
 
-// IterateArray calls fn for each element. element is the raw JSON
-// bytes of the value.
+// IterateArray calls fn for each element; element is the raw JSON
+// bytes of the value. It returns true only when data holds exactly one
+// complete array (trailing whitespace allowed) and fn never returned
+// false.
 func IterateArray(data []byte, fn func(element []byte) bool) bool {
-	_, ok := iterateRawArray(data, fn)
-	return ok
+	end, ok := iterateRawArray(data, fn)
+	return ok && SkipWS(data, end) == len(data)
 }
 
-// IterateStringArray calls fn for each string element. val aliases the
-// input and is only valid for the duration of the callback; use
-// strings.Clone to retain. Non-string elements abort the iteration.
+// IterateStringArray calls fn for each string element. val is the raw
+// string body between the quotes: escape sequences are not decoded
+// (use DecodeString on IterateArray elements when escapes may occur).
+// val aliases the input and is only valid for the duration of the
+// callback; use strings.Clone to retain. Non-string elements abort the
+// iteration.
 //
 //nolint:gosec // unsafe.String: zero-alloc borrow into data
 func IterateStringArray(data []byte, fn func(val string) bool) bool {
@@ -858,9 +811,12 @@ func validateArray(data []byte, i int) (int, bool) {
 // ---------------------------------------------------------------------------
 
 // DecodeString decodes a JSON string (including surrounding quotes)
-// into its Go form. The returned string is a fresh allocation.
+// into its Go form. The input must be exactly one grammar-valid JSON
+// string: raw control bytes, unescaped quotes, and trailing content
+// are rejected. The returned string is a fresh allocation.
 func DecodeString(raw []byte) (string, bool) {
-	if len(raw) < 2 || raw[0] != '"' || raw[len(raw)-1] != '"' {
+	end, ok := SkipStringAt(raw, 0)
+	if !ok || end != len(raw) {
 		return "", false
 	}
 	body := raw[1 : len(raw)-1]
@@ -868,7 +824,7 @@ func DecodeString(raw []byte) (string, bool) {
 		return string(body), true
 	}
 	out := make([]byte, 0, len(body))
-	out, ok := appendDecoded(out, body)
+	out, ok = appendDecoded(out, body)
 	if !ok {
 		return "", false
 	}
@@ -994,36 +950,11 @@ func decodeEscape(src []byte, i int, dst []byte) (next int, out []byte, ok bool)
 		if !ok {
 			return 0, dst, false
 		}
-		return i + consumed, appendRuneUTF8(dst, r), true
+		return i + consumed, utf8.AppendRune(dst, r), true
 	}
 	decoded := shortEscapeByte[esc]
 	if decoded == 0 {
 		return 0, dst, false
 	}
 	return i + 2, append(dst, decoded), true
-}
-
-func appendRuneUTF8(dst []byte, r rune) []byte {
-	switch {
-	case r < 0x80:
-		return append(dst, utf8Byte(r))
-	case r < 0x800:
-		return append(dst,
-			utf8Byte(0xC0|r>>6),
-			utf8Byte(0x80|r&0x3F),
-		)
-	case r < 0x10000:
-		return append(dst,
-			utf8Byte(0xE0|r>>12),
-			utf8Byte(0x80|(r>>6)&0x3F),
-			utf8Byte(0x80|r&0x3F),
-		)
-	default:
-		return append(dst,
-			utf8Byte(0xF0|r>>18),
-			utf8Byte(0x80|(r>>12)&0x3F),
-			utf8Byte(0x80|(r>>6)&0x3F),
-			utf8Byte(0x80|r&0x3F),
-		)
-	}
 }

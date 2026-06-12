@@ -44,6 +44,9 @@ jobs:
       - name: Run tests
         run: go test -race -shuffle=on -coverprofile=coverage.out ./...
 
+      - name: Run tests (purego fallback)
+        run: go test -tags=purego -race -shuffle=on ./...
+
       - name: Zero-allocation gate
         run: go test -run='^TestZeroAlloc_' -count=1 ./...
 
