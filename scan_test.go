@@ -281,6 +281,34 @@ func TestIsStructuralJSON_SkipLiteral_Mismatch(t *testing.T) {
 	}
 }
 
+func TestIsStructuralJSON_StringEscapes(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"fuzz seed invalid \\0 in value", `{"":["\0"]}`, false},
+		{"invalid \\x escape", `{"k":"\x41"}`, false},
+		{"invalid \\0 in key", `{"\0":1}`, false},
+		{"short \\u (two hex)", `{"k":"\u00"}`, false},
+		{"bare \\u", `{"k":"\u"}`, false},
+		{"non-hex \\u digit", `{"k":"\u12g4"}`, false},
+		{"trailing backslash", `{"k":"\`, false},
+		{"all valid short escapes", `{"k":"\b\f\n\r\t\\\"\/"}`, true},
+		{"escaped backslash then 0", `["\\0"]`, true},
+		{"valid \\uXXXX", `{"k":"\u00e9"}`, true},
+		{"lone high surrogate passes through", `{"k":"\uD800"}`, true},
+		{"lone low surrogate passes through", `{"k":"\uDC00"}`, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsStructuralJSON(tt.in); got != tt.want {
+				t.Errorf("IsStructuralJSON(%q) = %v, want %v", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
 // FindField escape-comparator error paths.
 
 func TestFindField_MatchEscape_BackslashAtEOF(t *testing.T) {
@@ -851,6 +879,17 @@ func BenchmarkFindField(b *testing.B) {
 	b.ResetTimer()
 	for b.Loop() {
 		FindField(data, "source")
+	}
+}
+
+func BenchmarkIsStructuralJSON(b *testing.B) {
+	s := `{"facility":23,"severity":3,"hostname":"FW01","app_name":"utm",` +
+		`"source":"10.0.0.1","message":"login failed for \"admin\"\n","path":"C:\\logs\\fw.txt"}`
+	b.ReportAllocs()
+	b.SetBytes(int64(len(s)))
+	b.ResetTimer()
+	for b.Loop() {
+		IsStructuralJSON(s)
 	}
 }
 

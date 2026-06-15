@@ -718,7 +718,7 @@ func validateValue(data []byte, i int) (int, bool) {
 	}
 	switch data[i] {
 	case '"':
-		return SkipStringAt(data, i)
+		return validateStringAt(data, i)
 	case '{':
 		return validateObject(data, i)
 	case '[':
@@ -769,7 +769,7 @@ func validateObjectEntry(data []byte, i int) (int, bool) {
 	if data[i] != '"' {
 		return i, false
 	}
-	end, ok := SkipStringAt(data, i)
+	end, ok := validateStringAt(data, i)
 	if !ok {
 		return i, false
 	}
@@ -804,6 +804,59 @@ func validateArray(data []byte, i int) (int, bool) {
 		}
 		i = end
 	}
+}
+
+// validateStringAt is SkipStringAt with strict escape validation for
+// IsStructuralJSON. Invalid UTF-8 and lone surrogates are still accepted,
+// matching encoding/json.
+func validateStringAt(data []byte, i int) (int, bool) {
+	if i >= len(data) || data[i] != '"' {
+		return i, false
+	}
+	n := len(data)
+	j := i + 1
+bulk:
+	for {
+		j = swarSkipStringBulk(data, j, n)
+		for j < n {
+			switch c := data[j]; {
+			case c == '"':
+				return j + 1, true
+			case c == '\\':
+				next, ok := validateEscape(data, j, n)
+				if !ok {
+					return j, false
+				}
+				j = next
+				continue bulk // resume SWAR after the escape
+			case c < 0x20:
+				return j, false
+			default:
+				j++
+			}
+		}
+		return j, false
+	}
+}
+
+func validateEscape(data []byte, j, n int) (int, bool) {
+	if j+1 >= n {
+		return j, false
+	}
+	esc := data[j+1]
+	if esc == 'u' {
+		if j+6 > n {
+			return j, false
+		}
+		if _, ok := parseHex4(data[j+2 : j+6]); !ok {
+			return j, false
+		}
+		return j + 6, true
+	}
+	if shortEscapeByte[esc] == 0 {
+		return j, false
+	}
+	return j + 2, true
 }
 
 // ---------------------------------------------------------------------------
