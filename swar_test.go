@@ -1,219 +1,170 @@
 package jsonfast
 
 import (
+	"bytes"
 	"encoding/binary"
+	"math"
+	"strings"
 	"testing"
 )
 
-func TestSwarSpecialEscape_SafeASCII(t *testing.T) {
-	w := binary.LittleEndian.Uint64([]byte("abcdefgh"))
-	if swarSpecialEscape(w) != 0 {
-		t.Error("expected 0 for safe ASCII")
-	}
+// isPlainSpec states the plain bytes by their range.
+func isPlainSpec(c byte) bool {
+	return c >= '\x20' && c <= '\x7f' && c != '\x22' && c != '\x5c'
 }
 
-func TestSwarSpecialEscape_Quote(t *testing.T) {
-	w := binary.LittleEndian.Uint64([]byte(`abcd"fgh`))
-	if swarSpecialEscape(w) == 0 {
-		t.Error("expected non-zero for embedded quote")
-	}
+// isBodySpec states the body bytes by their range.
+func isBodySpec(c byte) bool {
+	return c >= '\x20' && c != '\x22' && c != '\x5c'
 }
 
-func TestSwarSpecialEscape_Backslash(t *testing.T) {
-	w := binary.LittleEndian.Uint64([]byte(`abc\efgh`))
-	if swarSpecialEscape(w) == 0 {
-		t.Error("expected non-zero for embedded backslash")
+// laneWord returns a word of plain 'a' bytes whose given lanes hold c.
+func laneWord(c byte, lanes ...int) uint64 {
+	buf := []byte("aaaaaaaa")
+	for _, lane := range lanes {
+		buf[lane] = c
 	}
+	return binary.LittleEndian.Uint64(buf)
 }
 
-func TestSwarSpecialEscape_ControlChar(t *testing.T) {
-	buf := []byte("abcdefgh")
-	buf[3] = 0x01
-	w := binary.LittleEndian.Uint64(buf)
-	if swarSpecialEscape(w) == 0 {
-		t.Error("expected non-zero for control char")
-	}
-}
-
-func TestSwarSpecialEscape_HighBit(t *testing.T) {
-	buf := []byte("abcdefgh")
-	buf[5] = 0x80
-	w := binary.LittleEndian.Uint64(buf)
-	if swarSpecialEscape(w) == 0 {
-		t.Error("expected non-zero for high-bit byte")
-	}
-}
-
-func TestSwarSpecialEscape_AllZeros(t *testing.T) {
-	if swarSpecialEscape(0) == 0 {
-		t.Error("expected non-zero for all-NUL word")
-	}
-}
-
-func TestSwarSpecialSkip_SafeASCII(t *testing.T) {
-	w := binary.LittleEndian.Uint64([]byte("abcdefgh"))
-	if swarSpecialSkip(w) != 0 {
-		t.Error("expected 0 for safe ASCII")
-	}
-}
-
-func TestSwarSpecialSkip_Quote(t *testing.T) {
-	w := binary.LittleEndian.Uint64([]byte(`abcd"fgh`))
-	if swarSpecialSkip(w) == 0 {
-		t.Error("expected non-zero for embedded quote")
-	}
-}
-
-func TestSwarSpecialSkip_Backslash(t *testing.T) {
-	w := binary.LittleEndian.Uint64([]byte(`abc\efgh`))
-	if swarSpecialSkip(w) == 0 {
-		t.Error("expected non-zero for embedded backslash")
-	}
-}
-
-func TestSwarSpecialSkip_ControlChar(t *testing.T) {
-	buf := []byte("abcdefgh")
-	buf[3] = 0x01
-	w := binary.LittleEndian.Uint64(buf)
-	if swarSpecialSkip(w) == 0 {
-		t.Error("expected non-zero for control char")
-	}
-}
-
-func TestSwarSpecialSkip_HighBit_Allowed(t *testing.T) {
-	buf := []byte("abcdefgh")
-	buf[5] = 0x80
-	w := binary.LittleEndian.Uint64(buf)
-	if swarSpecialSkip(w) != 0 {
-		t.Error("expected 0 for high-bit byte in skip mode")
-	}
-}
-
-func TestSwarSpecialSkip_HighBit_AllHigh(t *testing.T) {
-	w := uint64(0x8080808080808080)
-	if swarSpecialSkip(w) != 0 {
-		t.Error("expected 0 for all-0x80 word in skip mode")
-	}
-}
-
-func TestSwarSpecialEscape_Space(t *testing.T) {
-	w := binary.LittleEndian.Uint64([]byte("abc efgh"))
-	if swarSpecialEscape(w) != 0 {
-		t.Error("expected 0 for embedded space")
-	}
-}
-
-func TestSwarSpecialEscape_Byte0x1F(t *testing.T) {
-	buf := []byte("abcdefgh")
-	buf[2] = 0x1F
-	w := binary.LittleEndian.Uint64(buf)
-	if swarSpecialEscape(w) == 0 {
-		t.Error("expected non-zero for 0x1F (last control char)")
-	}
-}
-
-func TestSwarSpecialSkip_Space(t *testing.T) {
-	w := binary.LittleEndian.Uint64([]byte("abc efgh"))
-	if swarSpecialSkip(w) != 0 {
-		t.Error("expected 0 for embedded space")
-	}
-}
-
-func TestSwarSpecialSkip_Byte0x1F(t *testing.T) {
-	buf := []byte("abcdefgh")
-	buf[2] = 0x1F
-	w := binary.LittleEndian.Uint64(buf)
-	if swarSpecialSkip(w) == 0 {
-		t.Error("expected non-zero for 0x1F (last control char)")
-	}
-}
-
-func TestSwarConstants(t *testing.T) {
-	tests := []struct {
-		name string
-		got  uint64
-		want uint64
-	}{
-		{"swarLo", swarLo, 0x0101010101010101},
-		{"swarHi", swarHi, 0x8080808080808080},
-		{"swarControl", swarControl, 0x2020202020202020},
-		{"swarQuote", swarQuote, 0x2222222222222222},
-		{"swarBackslash", swarBackslash, 0x5C5C5C5C5C5C5C5C},
-	}
-	for _, tt := range tests {
-		if tt.got != tt.want {
-			t.Errorf("%s = 0x%016X, want 0x%016X", tt.name, tt.got, tt.want)
+func TestPlainByteAndBodyByteClassifyEveryByte(t *testing.T) {
+	for n := range math.MaxUint8 + 1 {
+		c := byte(n)
+		if got, want := plainByte(c), isPlainSpec(c); got != want {
+			t.Errorf("plainByte(%#02x) = %v, want %v", c, got, want)
+		}
+		if got, want := bodyByte(c), isBodySpec(c); got != want {
+			t.Errorf("bodyByte(%#02x) = %v, want %v", c, got, want)
 		}
 	}
 }
 
-func TestSwarEscapeVsSkip_Difference(t *testing.T) {
-	for b := byte(0x80); b != 0; b++ {
-		var buf [8]byte
-		for i := range buf {
-			buf[i] = 'a'
-		}
-		buf[0] = b
-		w := binary.LittleEndian.Uint64(buf[:])
-		escape := swarSpecialEscape(w)
-		skip := swarSpecialSkip(w)
-		if escape == 0 {
-			t.Errorf("swarSpecialEscape missed high-bit byte 0x%02X", b)
-		}
-		if skip != 0 {
-			t.Errorf("swarSpecialSkip triggered on high-bit byte 0x%02X", b)
+func TestPlainWordAndBodyWordMatchTheirBytesInEveryLane(t *testing.T) {
+	for lane := range wordSize {
+		for n := range math.MaxUint8 + 1 {
+			c := byte(n)
+			w := laneWord(c, lane)
+			if got, want := plainWord(w), isPlainSpec(c); got != want {
+				t.Fatalf("plainWord(%#02x in lane %d) = %v, want %v", c, lane, got, want)
+			}
+			if got, want := bodyWord(w), isBodySpec(c); got != want {
+				t.Fatalf("bodyWord(%#02x in lane %d) = %v, want %v", c, lane, got, want)
+			}
 		}
 	}
 }
 
-func TestSwarEscapeVsSkip_Agreement(t *testing.T) {
-	for n := range 0x80 {
-		b := byte(n)
-		var buf [8]byte
-		for i := range buf {
-			buf[i] = 'a'
-		}
-		buf[0] = b
-		w := binary.LittleEndian.Uint64(buf[:])
-		escape := swarSpecialEscape(w)
-		skip := swarSpecialSkip(w)
-		if (escape != 0) != (skip != 0) {
-			t.Errorf("disagreement on ASCII byte 0x%02X: escape=%d, skip=%d",
-				b, escape, skip)
+func TestPlainWordAndBodyWordIgnoreBorrowsAcrossLanes(t *testing.T) {
+	for _, lanes := range [][2]int{
+		{0, 1}, {wordSize/2 - 1, wordSize / 2}, {wordSize - 2, wordSize - 1}, {0, wordSize - 1},
+	} {
+		for n := range math.MaxUint16 + 1 {
+			lo, hi := byte(n), byte(n>>8)
+			buf := []byte("aaaaaaaa")
+			buf[lanes[0]], buf[lanes[1]] = lo, hi
+			w := binary.LittleEndian.Uint64(buf)
+			if got, want := plainWord(w), isPlainSpec(lo) && isPlainSpec(hi); got != want {
+				t.Fatalf("plainWord(%#02x, %#02x in lanes %v) = %v, want %v", lo, hi, lanes, got, want)
+			}
+			if got, want := bodyWord(w), isBodySpec(lo) && isBodySpec(hi); got != want {
+				t.Fatalf("bodyWord(%#02x, %#02x in lanes %v) = %v, want %v", lo, hi, lanes, got, want)
+			}
 		}
 	}
 }
 
-func BenchmarkSwarSpecialEscape(b *testing.B) {
-	w := binary.LittleEndian.Uint64([]byte("abcdefgh"))
+func TestZeroLanesFindsAnyZeroByte(t *testing.T) {
+	for lane := range wordSize {
+		if zeroLanes(laneWord(0, lane)) == 0 {
+			t.Errorf("zeroLanes(%#x) = 0, want the bit of the zero byte in lane %d", laneWord(0, lane), lane)
+		}
+	}
+	for _, w := range []uint64{laneWord('a'), swarHi, ^uint64(0), swarLo} {
+		if zeroLanes(w) != 0 {
+			t.Errorf("zeroLanes(%#x) = %#x, want 0 for a word with no zero byte", w, zeroLanes(w))
+		}
+	}
+	if zeroLanes(laneWord(0, 2, wordSize-1))&swarHi == 0 {
+		t.Errorf("zeroLanes(%#x) = no high bit, want the bits of its two zero bytes", laneWord(0, 2, wordSize-1))
+	}
+}
+
+func TestPlainRunAndBodyRunStopAtTheFirstByteTheyReject(t *testing.T) {
+	for _, data := range runInputs("\x00\x1f\"\\\x80\xff") {
+		for start := 0; start <= len(data); start++ {
+			if got, want := plainRun(data, start), firstMatch(data, start, isPlainSpec); got != want {
+				t.Fatalf("plainRun(%q, %d) = %d, want %d", data, start, got, want)
+			}
+			if got, want := bodyRun(data, start), firstMatch(data, start, isBodySpec); got != want {
+				t.Fatalf("bodyRun(%q, %d) = %d, want %d", data, start, got, want)
+			}
+		}
+	}
+}
+
+// runRule is what the shared form of plainRun and bodyRun asks of the bytes
+// it keeps: a test of one word and a test of one byte.
+type runRule interface {
+	word(w uint64) bool
+	single(c byte) bool
+}
+
+type plainRule struct{}
+
+func (plainRule) word(w uint64) bool { return plainWord(w) }
+
+func (plainRule) single(c byte) bool { return plainByte(c) }
+
+type bodyRule struct{}
+
+func (bodyRule) word(w uint64) bool { return bodyWord(w) }
+
+func (bodyRule) single(c byte) bool { return bodyByte(c) }
+
+// sharedRun is the one generic form that could replace plainRun and bodyRun.
+func sharedRun[R runRule](data []byte, j int) int {
+	var rule R
+	for range (len(data) - j) / wordSize {
+		if !rule.word(load64(data, j)) {
+			break
+		}
+		j += wordSize
+	}
+	for j < len(data) && rule.single(data[j]) {
+		j++
+	}
+	return j
+}
+
+// runUnits is how many copies of its unit a run benchmark scans.
+const runUnits = 32
+
+// benchmarkRun times run over runUnits copies of unit and a closing quote.
+func benchmarkRun(b *testing.B, unit string, run func(data []byte, j int) int) {
+	b.Helper()
+	data := []byte(strings.Repeat(unit, runUnits) + quote)
+	if got, want := run(data, 0), bytes.IndexByte(data, '"'); got != want {
+		b.Fatalf("the run over %q stopped at %d, want the quote at %d", unit, got, want)
+	}
+	b.ReportAllocs()
+	b.SetBytes(int64(len(data)))
 	for b.Loop() {
-		swarSpecialEscape(w)
+		_ = run(data, 0)
 	}
 }
 
-func BenchmarkSwarSpecialSkip(b *testing.B) {
-	w := binary.LittleEndian.Uint64([]byte("abcdefgh"))
-	for b.Loop() {
-		swarSpecialSkip(w)
-	}
+func BenchmarkPlainRun(b *testing.B) {
+	benchmarkRun(b, "abcdefgh", plainRun)
 }
 
-// load64 correctness: the SWAR predicates only test per-byte membership,
-// so any byte permutation works — but both implementations must agree
-// with a defined reference on every offset, including unaligned ones.
-func TestLoad64_MatchesReference(t *testing.T) {
-	buf := make([]byte, 64)
-	for i := range buf {
-		buf[i] = byte(i*7 + 13)
-	}
-	s := string(buf)
-	for j := 0; j+8 <= len(buf); j++ {
-		want := binary.LittleEndian.Uint64(buf[j : j+8])
-		if got := load64(buf, j); got != want {
-			t.Fatalf("load64(buf, %d) = %#x, want %#x", j, got, want)
-		}
-		if got := load64String(s, j); got != want {
-			t.Fatalf("load64String(s, %d) = %#x, want %#x", j, got, want)
-		}
-	}
+func BenchmarkPlainRunSharedForm(b *testing.B) {
+	benchmarkRun(b, "abcdefgh", sharedRun[plainRule])
+}
+
+func BenchmarkBodyRun(b *testing.B) {
+	benchmarkRun(b, "abcdéfgh", bodyRun)
+}
+
+func BenchmarkBodyRunSharedForm(b *testing.B) {
+	benchmarkRun(b, "abcdéfgh", sharedRun[bodyRule])
 }
