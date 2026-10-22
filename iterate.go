@@ -36,7 +36,7 @@ func IterateMembers[T Text](data T, fn func(name, value T) error) error {
 	)
 	i, step := openContainer(d, '{')
 	for step == stepItem {
-		name, end, st := tokenAt[anyBody](&a, d, i, arenaRoom)
+		name, end, st := tokenAt(&a, d, i, arenaRoom, anyBody)
 		if st == strMalformed {
 			return ErrMalformed
 		}
@@ -233,7 +233,7 @@ func IterateStringArray[T Text](data T, fn func(s T) error) error {
 	var a arena
 	i, step := openContainer(d, '[')
 	for step == stepItem {
-		v, end, st := tokenAt[anyBody](&a, d, i, arenaRoom)
+		v, end, st := tokenAt(&a, d, i, arenaRoom, anyBody)
 		if st == strMalformed {
 			return ErrMalformed
 		}

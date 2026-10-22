@@ -302,7 +302,7 @@ func TestArenaTokenAtReportsTheOutcome(t *testing.T) {
 		{``, "", "", strMalformed},
 	} {
 		var a arena
-		value, end, st := tokenAt[anyBody](&a, []byte(tc.data), 0, len(tc.data))
+		value, end, st := tokenAt(&a, []byte(tc.data), 0, len(tc.data), anyBody)
 		if st != tc.st || tc.data[end:] != tc.rest || string(value) != tc.value {
 			t.Errorf("tokenAt(%q, 0) = %q, %d, %d, want %q before %q, %d",
 				tc.data, value, end, st, tc.value, tc.rest, tc.st)
@@ -315,7 +315,7 @@ func TestArenaTokenAtSizesTheFirstChunkToTheRestUpToTheRoom(t *testing.T) {
 	for _, rest := range []int{len(token), documentedRoom - 1, documentedRoom, documentedRoom + 1, 2 * documentedRoom} {
 		data := []byte("[" + token + strings.Repeat(" ", rest-len(token)))
 		var a arena
-		value, end, st := tokenAt[anyBody](&a, data, 1, arenaRoom)
+		value, end, st := tokenAt(&a, data, 1, arenaRoom, anyBody)
 		want := min(rest, documentedRoom)
 		if string(value) != lineAB || end != 1+len(token) || st != strDecoded || cap(a.buf) != want {
 			t.Errorf("tokenAt with %d bytes left = %q, %d, %d in a chunk of %d, want %q, %d, %d in one of %d",
@@ -328,14 +328,14 @@ func TestArenaTokenAtDecodesTheStringsOfADocumentIntoItsFirstChunk(t *testing.T)
 	var a arena
 	tail := strings.Repeat("c", hugeDigits)
 	data := []byte(`["a\nb","\u00e9",1,"` + tail + `"]`)
-	_, end, _ := tokenAt[anyBody](&a, data, 1, arenaRoom)
-	value, _, st := tokenAt[anyBody](&a, data, end+1, arenaRoom)
+	_, end, _ := tokenAt(&a, data, 1, arenaRoom, anyBody)
+	value, _, st := tokenAt(&a, data, end+1, arenaRoom, anyBody)
 	if string(value) != "é" || st != strDecoded || cap(a.buf) != documentedRoom || len(a.buf) != len(lineAB+"é") {
 		t.Fatalf("a second token = %q, %d with %d of %d arena bytes, want é after %q in one chunk of %d",
 			value, st, len(a.buf), cap(a.buf), lineAB, documentedRoom)
 	}
 	used := len(a.buf)
-	clean, _, st := tokenAt[anyBody](&a, data, bytes.Index(data, []byte(tail))-1, arenaRoom)
+	clean, _, st := tokenAt(&a, data, bytes.Index(data, []byte(tail))-1, arenaRoom, anyBody)
 	if st != strView || len(clean) != len(tail) || len(a.buf) != used {
 		t.Fatalf("a clean token of %d bytes = %d with %d arena bytes, want a view and %d",
 			len(clean), st, len(a.buf), used)
@@ -345,16 +345,16 @@ func TestArenaTokenAtDecodesTheStringsOfADocumentIntoItsFirstChunk(t *testing.T)
 func TestArenaTokenAtMovesAStringThatOutgrowsItsRoom(t *testing.T) {
 	var a arena
 	firstToken := []byte(`"a\nb"`)
-	first, _, _ := tokenAt[anyBody](&a, firstToken, 0, len(firstToken))
+	first, _, _ := tokenAt(&a, firstToken, 0, len(firstToken), anyBody)
 	long := strings.Repeat("x", longRun)
 	data := []byte(`"\t` + long + `"`)
-	value, end, st := tokenAt[anyBody](&a, data, 0, 1)
+	value, end, st := tokenAt(&a, data, 0, 1, anyBody)
 	if want := "\t" + long; string(value) != want || end != len(data) || cap(a.buf) != len(want) {
 		t.Fatalf("a token past the room = %q, %d, %d in a chunk of %d, want %q, %d moved to one of %d",
 			value, end, st, cap(a.buf), want, len(data), len(want))
 	}
 	chunk := cap(a.buf)
-	value, _, st = tokenAt[anyBody](&a, []byte(`"\n"`), 0, len(`"\n"`))
+	value, _, st = tokenAt(&a, []byte(`"\n"`), 0, len(`"\n"`), anyBody)
 	if string(value) != "\n" || cap(a.buf) != 2*chunk {
 		t.Fatalf("a token past a full chunk of %d = %q, %d in a chunk of %d, want a doubled chunk",
 			chunk, value, st, cap(a.buf))
@@ -366,7 +366,7 @@ func TestArenaTokenAtMovesAStringThatOutgrowsItsRoom(t *testing.T) {
 	var fit arena
 	fit.buf = make([]byte, 0, len(body))
 	token := []byte(`"\n123"`)
-	if value, _, _ = tokenAt[anyBody](&fit, token, 0, len(body)); string(value) != body || cap(fit.buf) != len(body) {
+	if value, _, _ = tokenAt(&fit, token, 0, len(body), anyBody); string(value) != body || cap(fit.buf) != len(body) {
 		t.Fatalf("a token that fills its room = %q in a chunk of %d, want %q kept in one of %d",
 			value, cap(fit.buf), body, len(body))
 	}
@@ -376,7 +376,7 @@ func TestArenaTokenAtViewsACleanTokenThatEndsItsInput(t *testing.T) {
 	var a arena
 	data := []byte(quotedHello)
 	want := quotedHello[1 : len(quotedHello)-1]
-	value, end, st := tokenAt[anyBody](&a, data, 0, arenaRoom)
+	value, end, st := tokenAt(&a, data, 0, arenaRoom, anyBody)
 	if st != strView || string(value) != want || end != len(data) || cap(a.buf) != 0 {
 		t.Fatalf("tokenAt(%s) = %q, %d, %d in a chunk of %d, want a view of %q, %d, %d and no chunk",
 			data, value, end, st, cap(a.buf), want, len(data), strView)
@@ -388,7 +388,7 @@ func TestArenaTokenAtRejectsWhatIsNoToken(t *testing.T) {
 		data := []byte(doc)
 		assertAllocs(t, 0, func() {
 			var a arena
-			value, end, st := tokenAt[anyBody](&a, data, 0, arenaRoom)
+			value, end, st := tokenAt(&a, data, 0, arenaRoom, anyBody)
 			if st != strMalformed || value != nil || end != 0 {
 				t.Errorf("tokenAt(%q) = %q, %d, %d, want nil, 0, malformed", doc, value, end, st)
 			}
@@ -468,7 +468,7 @@ func none(int) int { return 0 }
 func TestArenaTokenAtDropsTheMalformedValue(t *testing.T) {
 	var a arena
 	data := `"ab\q"`
-	v, end, st := tokenAt[anyBody](&a, []byte(data), 0, len(data))
+	v, end, st := tokenAt(&a, []byte(data), 0, len(data), anyBody)
 	if v != nil || end != 0 || st != strMalformed {
 		t.Fatalf("tokenAt = %q, %d, %d, want nil, 0, malformed", v, end, st)
 	}
@@ -483,9 +483,9 @@ func TestArenaStrictTokenStopsAtTheFirstRuneWithNoCodePoint(t *testing.T) {
 			t.Errorf("strictToken(%.12q) = %q, %d, %v and carved %d bytes, want nil, 0, false and none",
 				raw, value, end, ok, len(a.buf))
 		}
-		value, end, st := tokenAt[anyBody](&a, []byte(raw), 0, len(raw))
+		value, end, st := tokenAt(&a, []byte(raw), 0, len(raw), anyBody)
 		if st != strReplaced || end != len(raw) || !strings.HasSuffix(string(value), strings.Repeat("\n", longRun)) {
-			t.Errorf("tokenAt[anyBody](%.12q) = %d bytes, %d, %d, want the whole token, %d, replaced",
+			t.Errorf("tokenAt(%.12q, anyBody) = %d bytes, %d, %d, want the whole token, %d, replaced",
 				raw, len(value), end, st, len(raw))
 		}
 	}

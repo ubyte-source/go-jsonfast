@@ -147,7 +147,7 @@ func (vd *valueDecoder[T]) scalar(i, end int) any {
 // from the arena, since the caller may write to the input once DecodeValue returns.
 func (vd *valueDecoder[T]) text(w *walker) (string, bool) {
 	i := w.i - 1
-	v, end, st := tokenAt[utf8Body](&vd.arena, vd.data, i, arenaRoom)
+	v, end, st := tokenAt(&vd.arena, vd.data, i, arenaRoom, utf8Body)
 	switch {
 	case st == strMalformed:
 		return "", false

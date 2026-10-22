@@ -232,6 +232,7 @@ func TestSkipStringAtReturnsTheIndexPastTheQuote(t *testing.T) {
 		{quoted(long + `\n`), "", true},
 		{`"unterminated`, "", false},
 		{plainText, "", false},
+		{`a"bc`, "", false},
 		{``, "", false},
 		{"\"ctrl" + ctrlTail, "", false},
 		{quoted(long + "\x05"), "", false},

@@ -172,44 +172,51 @@ func skipStringAt(data []byte, i int) (int, bool) {
 	return stringEnd(data, i+1)
 }
 
-// stringRule is how a string scan reads a body: run skips the bytes the rule
-// keeps as they are, and keeps accepts a rune that runeAt returns.
-type stringRule interface {
-	run(data []byte, j int) int
-	keeps(r rune) bool
+// stringRule is how a string scan reads a body: which bytes it skips as they
+// are, and which runes it keeps.
+type stringRule bool
+
+// The string rules.
+const (
+	// anyBody keeps every byte a body may hold and every well-formed escape, as
+	// json.Valid does.
+	anyBody stringRule = false
+	// utf8Body keeps valid UTF-8 and every well-formed escape but a lone
+	// surrogate half, so it keeps only code points.
+	utf8Body stringRule = true
+)
+
+// keeps reports whether the rule accepts r, a rune that runeAt returns.
+func (rule stringRule) keeps(r rune) bool {
+	if rule == utf8Body {
+		return r >= 0
+	}
+	return r != malformedRune
 }
 
-// anyBody keeps every byte a body may hold and every well-formed escape, as
-// json.Valid does.
-type anyBody struct{}
-
-func (anyBody) run(data []byte, j int) int { return bodyRun(data, j) }
-
-func (anyBody) keeps(r rune) bool { return r != malformedRune }
-
-// utf8Body keeps valid UTF-8 and every well-formed escape but a lone surrogate
-// half, so it keeps only code points.
-type utf8Body struct{}
-
-func (utf8Body) run(data []byte, j int) int { return cleanRun(data, j) }
-
-func (utf8Body) keeps(r rune) bool { return r >= 0 }
-
 // bodyEnd returns the index past the closing quote of the string body that
-// continues at data[j], read by the rule R.
-func bodyEnd[R stringRule](data []byte, j int) (int, bool) {
-	var rule R
+// continues at data[j], read by rule; a short escape stands for an ASCII byte,
+// which both rules keep.
+func bodyEnd(data []byte, j int, rule stringRule) (int, bool) {
 	for {
-		j = rule.run(data, j)
+		if rule == utf8Body {
+			j = cleanRun(data, j)
+		} else {
+			j = bodyRun(data, j)
+		}
 		switch {
-		case j == len(data):
+		case uint(j) >= uint(len(data)):
 			return 0, false
 		case data[j] == '"':
 			return j + 1, true
 		case data[j] != '\\':
 			return 0, false
 		}
-		r, n := escapeAt(data, j)
+		if shortEscape(data, j) != 0 {
+			j += shortEscapeLen
+			continue
+		}
+		r, n := unicodeRune(data, j)
 		if !rule.keeps(r) {
 			return 0, false
 		}
@@ -220,7 +227,7 @@ func bodyEnd[R stringRule](data []byte, j int) (int, bool) {
 // stringEnd returns the index past the closing quote of the string body that
 // continues at data[j].
 func stringEnd(data []byte, j int) (int, bool) {
-	return bodyEnd[anyBody](data, j)
+	return bodyEnd(data, j, anyBody)
 }
 
 // closerOffset is how far each closer sits past its opener, '}' past '{' and ']'

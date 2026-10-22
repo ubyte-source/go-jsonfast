@@ -60,17 +60,17 @@ const (
 // decodeToken decodes the string token that spans all of d.
 func decodeToken(d []byte) ([]byte, strStatus) {
 	var a arena
-	v, end, st := tokenAt[anyBody](&a, d, 0, len(d))
+	v, end, st := tokenAt(&a, d, 0, len(d), anyBody)
 	if end != len(d) {
 		return nil, strMalformed
 	}
 	return v, st
 }
 
-// tokenAt decodes by the rule R the string token at data[i] in one pass and returns
+// tokenAt decodes by rule the string token at data[i] in one pass and returns
 // its value, the index past it and the outcome; a value that needs decoding is carved
 // from a, whose new chunks hold at least the rest of data up to room bytes.
-func tokenAt[R stringRule](a *arena, data []byte, i, room int) (value []byte, end int, st strStatus) {
+func tokenAt(a *arena, data []byte, i, room int, rule stringRule) (value []byte, end int, st strStatus) {
 	if i == len(data) || data[i] != '"' {
 		return nil, 0, strMalformed
 	}
@@ -78,14 +78,14 @@ func tokenAt[R stringRule](a *arena, data []byte, i, room int) (value []byte, en
 	if j < len(data) && data[j] == '"' {
 		return data[i+1 : j : j], j + 1, strView
 	}
-	v, end, st := decodeFrom[R](a, data, i+1, j, min(len(data)-i, room))
+	v, end, st := decodeFrom(a, data, i+1, j, min(len(data)-i, room), rule)
 	return a.carve(v), end, st
 }
 
 // strictToken is tokenAt by the ValidUTF8 rule, for a walk: it fails as soon as it
 // reads a byte or escape that holds no code point.
 func (a *arena) strictToken(data []byte, i int) (value []byte, end int, ok bool) {
-	value, end, st := tokenAt[utf8Body](a, data, i, arenaRoom)
+	value, end, st := tokenAt(a, data, i, arenaRoom, utf8Body)
 	return value, end, st != strMalformed
 }
 
@@ -134,11 +134,10 @@ func (a *arena) rewind(m arenaMark) {
 	a.buf = a.buf[:0]
 }
 
-// decodeFrom decodes by the rule R the body of a string from data[j], whose clean run
+// decodeFrom decodes by rule the body of a string from data[j], whose clean run
 // ends at data[k], at the end of a's chunk in use, moving to new chunks of floor bytes
 // or more when it needs them, and checks what ends each run before it writes.
-func decodeFrom[R stringRule](a *arena, data []byte, j, k, floor int) (v []byte, end int, st strStatus) {
-	var rule R
+func decodeFrom(a *arena, data []byte, j, k, floor int, rule stringRule) (v []byte, end int, st strStatus) {
 	v, st = a.buf[len(a.buf):], strDecoded
 	for {
 		switch {
@@ -146,6 +145,12 @@ func decodeFrom[R stringRule](a *arena, data []byte, j, k, floor int) (v []byte,
 			return nil, 0, strMalformed
 		case data[k] == '"':
 			return append(a.grow(v, k-j, floor), data[j:k]...), k + 1, st
+		}
+		if b := shortEscape(data, k); b != 0 {
+			v = append(append(a.grow(v, k-j+1, floor), data[j:k]...), b)
+			j = k + shortEscapeLen
+			k = cleanRun(data, j)
+			continue
 		}
 		r, n := runeAt(data, k)
 		switch {
@@ -192,20 +197,29 @@ func runeAt(data []byte, i int) (r rune, n int) {
 	return badRune, 1
 }
 
-// escapeAt decodes the escape at data[j], a backslash. A surrogate pair joins
-// into one code point and any other surrogate half decodes to badRune; a
-// malformed escape is malformedRune, one byte long.
+// escapeAt decodes the escape at data[j], a backslash: a short escape, else a
+// \u escape by unicodeRune.
 func escapeAt(data []byte, j int) (r rune, n int) {
-	if j+1 == len(data) {
-		return malformedRune, 1
+	if b := shortEscape(data, j); b != 0 {
+		return rune(b), shortEscapeLen
 	}
-	if c := data[j+1]; c != 'u' {
-		if b := unescapeByte(c); b != 0 {
-			return rune(b), shortEscapeLen
-		}
-		return malformedRune, 1
+	return unicodeRune(data, j)
+}
+
+// shortEscape returns the byte that the two-byte escape at data[j] stands for,
+// or 0 when none starts there.
+func shortEscape(data []byte, j int) byte {
+	if data[j] != '\\' || j+1 == len(data) {
+		return 0
 	}
-	hi, ok := hex4(data, j+len(`\u`))
+	return unescapeByte(data[j+1])
+}
+
+// unicodeRune decodes the \u escape at data[j], a backslash. A surrogate pair
+// joins into one code point and any other surrogate half decodes to badRune; a
+// malformed escape is malformedRune, one byte long.
+func unicodeRune(data []byte, j int) (r rune, n int) {
+	hi, ok := unicodeEscape(data, j)
 	switch {
 	case !ok:
 		return malformedRune, 1

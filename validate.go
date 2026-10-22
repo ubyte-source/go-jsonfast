@@ -24,7 +24,7 @@ func walkFault(data []byte, i int) error {
 
 // strictEnd returns the index past the string at data[at] read by the ValidUTF8 rule.
 func strictEnd(data []byte, at int) (int, bool) {
-	return bodyEnd[utf8Body](data, at+1)
+	return bodyEnd(data, at+1, utf8Body)
 }
 
 // WalkStrings calls fn, which must not be nil, with every string of the value in data,
