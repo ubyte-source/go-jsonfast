@@ -39,7 +39,7 @@ func TestPlainByteAndBodyByteClassifyEveryByte(t *testing.T) {
 	}
 }
 
-func TestPlainWordAndBodyWordMatchTheirBytesInEveryLane(t *testing.T) {
+func TestPlainWordAndBodyMaskMatchTheirBytesInEveryLane(t *testing.T) {
 	for lane := range wordSize {
 		for n := range math.MaxUint8 + 1 {
 			c := byte(n)
@@ -47,14 +47,14 @@ func TestPlainWordAndBodyWordMatchTheirBytesInEveryLane(t *testing.T) {
 			if got, want := plainWord(w), isPlainSpec(c); got != want {
 				t.Fatalf("plainWord(%#02x in lane %d) = %v, want %v", c, lane, got, want)
 			}
-			if got, want := bodyWord(w), isBodySpec(c); got != want {
-				t.Fatalf("bodyWord(%#02x in lane %d) = %v, want %v", c, lane, got, want)
+			if got, want := bodyMask(w) == 0, isBodySpec(c); got != want {
+				t.Fatalf("bodyMask(%#02x in lane %d) == 0 is %v, want %v", c, lane, got, want)
 			}
 		}
 	}
 }
 
-func TestPlainWordAndBodyWordIgnoreBorrowsAcrossLanes(t *testing.T) {
+func TestPlainWordAndBodyMaskIgnoreBorrowsAcrossLanes(t *testing.T) {
 	for _, lanes := range [][2]int{
 		{0, 1}, {wordSize/2 - 1, wordSize / 2}, {wordSize - 2, wordSize - 1}, {0, wordSize - 1},
 	} {
@@ -66,8 +66,31 @@ func TestPlainWordAndBodyWordIgnoreBorrowsAcrossLanes(t *testing.T) {
 			if got, want := plainWord(w), isPlainSpec(lo) && isPlainSpec(hi); got != want {
 				t.Fatalf("plainWord(%#02x, %#02x in lanes %v) = %v, want %v", lo, hi, lanes, got, want)
 			}
-			if got, want := bodyWord(w), isBodySpec(lo) && isBodySpec(hi); got != want {
-				t.Fatalf("bodyWord(%#02x, %#02x in lanes %v) = %v, want %v", lo, hi, lanes, got, want)
+			if got, want := bodyMask(w) == 0, isBodySpec(lo) && isBodySpec(hi); got != want {
+				t.Fatalf("bodyMask(%#02x, %#02x in lanes %v) == 0 is %v, want %v", lo, hi, lanes, got, want)
+			}
+		}
+	}
+}
+
+func TestFirstLaneOfAMaskIsItsFirstRejectedByte(t *testing.T) {
+	masks := []struct {
+		mask func(uint64) uint64
+		keep func(byte) bool
+		name string
+	}{{plainMask, isPlainSpec, "plainMask"}, {bodyMask, isBodySpec, "bodyMask"}}
+	for _, lanes := range [][2]int{
+		{0, 1}, {wordSize/2 - 1, wordSize / 2}, {wordSize - 2, wordSize - 1}, {0, wordSize - 1},
+	} {
+		for n := range math.MaxUint16 + 1 {
+			buf := []byte("aaaaaaaa")
+			buf[lanes[0]], buf[lanes[1]] = byte(n), byte(n>>8)
+			w := binary.LittleEndian.Uint64(buf)
+			for _, m := range masks {
+				want := firstMatch(buf, 0, m.keep)
+				if got := m.mask(w); (got == 0) != (want == wordSize) || got != 0 && firstLane(got) != want {
+					t.Fatalf("%s(%q) = %#x, want the first flag in lane %d of %d", m.name, buf, got, want, wordSize)
+				}
 			}
 		}
 	}
@@ -117,7 +140,7 @@ func (plainRule) single(c byte) bool { return plainByte(c) }
 
 type bodyRule struct{}
 
-func (bodyRule) word(w uint64) bool { return bodyWord(w) }
+func (bodyRule) word(w uint64) bool { return bodyMask(w) == 0 }
 
 func (bodyRule) single(c byte) bool { return bodyByte(c) }
 

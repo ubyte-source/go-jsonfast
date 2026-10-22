@@ -276,8 +276,9 @@ func skipBraced(data []byte, i int) (int, bool) {
 func bracedRun(data []byte, j int, opener byte) int {
 	open, shut := swarLo*uint64(opener), swarLo*uint64(closerOf(opener))
 	for range (len(data) - j) / wordSize {
-		if w := load64(data, j); zeroLanes(w^swarQuote)|zeroLanes(w^open)|zeroLanes(w^shut) != 0 {
-			return bracedBytes(data, j, opener)
+		w := load64(data, j)
+		if m := zeroLanes(w^swarQuote) | zeroLanes(w^open) | zeroLanes(w^shut); m != 0 {
+			return j + firstLane(m)
 		}
 		j += wordSize
 	}

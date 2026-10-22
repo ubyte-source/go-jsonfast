@@ -441,7 +441,7 @@ go-jsonfast/
 ├── text.go            # Text and the zero-copy views
 ├── errors.go          # ErrMalformed and ErrDuplicateName
 ├── swar.go            # SWAR byte classes and runs
-├── swar_unsafe.go     # One unaligned 8-byte load (amd64, arm64, ppc64le, s390x)
+├── swar_unsafe.go     # One unaligned 8-byte load (amd64, arm64, ppc64le)
 ├── swar_purego.go     # encoding/binary load (other architectures or -tags=purego)
 ├── scan.go            # TrimWS and the number and string grammar
 ├── iterate.go         # Iterate*, Find* and WalkTokens

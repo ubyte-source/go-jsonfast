@@ -1,9 +1,15 @@
 package jsonfast
 
-import "unicode/utf8"
+import (
+	"math/bits"
+	"unicode/utf8"
+)
 
 // wordSize is the number of bytes one SWAR word holds.
 const wordSize = 8
+
+// byteBits is the number of bits of one byte, the width of a SWAR lane.
+const byteBits = 8
 
 // SWAR words: every byte of each word holds the named value.
 const (
@@ -15,7 +21,8 @@ const (
 )
 
 // zeroLanes sets the high bit of every zero byte of x. A borrow may also set
-// it above a zero byte, so the result tells exactly whether x has one.
+// it above a zero byte, so the result tells exactly whether x has one, and its
+// lowest flag is exact.
 func zeroLanes(x uint64) uint64 {
 	return (x - swarLo) &^ x & swarHi
 }
@@ -26,10 +33,16 @@ func plainByte(c byte) bool {
 	return c >= ' ' && c < utf8.RuneSelf && c != '"' && c != '\\'
 }
 
-// plainWord reports whether every byte of w is plain. A byte below ' '
-// borrows, which flags only bytes above one that is flagged already.
+// plainMask flags the bytes of w that are not plain. A byte below ' ' borrows,
+// which flags only bytes above one that is flagged already, so the lowest flag
+// is exact.
+func plainMask(w uint64) uint64 {
+	return ((w-swarSpace)|w)&swarHi | zeroLanes(w^swarQuote) | zeroLanes(w^swarBackslash)
+}
+
+// plainWord reports whether every byte of w is plain.
 func plainWord(w uint64) bool {
-	return ((w-swarSpace)|w)&swarHi|zeroLanes(w^swarQuote)|zeroLanes(w^swarBackslash) == 0
+	return plainMask(w) == 0
 }
 
 // bodyByte reports whether a string body holds c as it is, UTF-8 unchecked:
@@ -38,9 +51,16 @@ func bodyByte(c byte) bool {
 	return c >= ' ' && c != '"' && c != '\\'
 }
 
-// bodyWord reports whether every byte of w is a body byte.
-func bodyWord(w uint64) bool {
-	return (w-swarSpace)&^w&swarHi|zeroLanes(w^swarQuote)|zeroLanes(w^swarBackslash) == 0
+// bodyMask flags the bytes of w that are not body bytes; its lowest flag is
+// exact, as plainMask's is.
+func bodyMask(w uint64) uint64 {
+	return (w-swarSpace)&^w&swarHi | zeroLanes(w^swarQuote) | zeroLanes(w^swarBackslash)
+}
+
+// firstLane returns the index in its word of the byte that the lowest set bit
+// of m flags; load64 reads little-endian, so that byte comes first.
+func firstLane(m uint64) int {
+	return bits.TrailingZeros64(m) / byteBits
 }
 
 // plainRun returns the index of the first byte at or after data[j] that is
@@ -49,8 +69,8 @@ func bodyWord(w uint64) bool {
 func plainRun(data []byte, j int) int {
 	words := (len(data) - j) / wordSize
 	for range words {
-		if !plainWord(load64(data, j)) {
-			return plainBytes(data, j)
+		if m := plainMask(load64(data, j)); m != 0 {
+			return j + firstLane(m)
 		}
 		j += wordSize
 	}
@@ -72,8 +92,8 @@ func plainBytes(data []byte, j int) int {
 // a body byte, or len(data), testing one SWAR word at a time.
 func bodyRun(data []byte, j int) int {
 	for range (len(data) - j) / wordSize {
-		if !bodyWord(load64(data, j)) {
-			return bodyBytes(data, j)
+		if m := bodyMask(load64(data, j)); m != 0 {
+			return j + firstLane(m)
 		}
 		j += wordSize
 	}
