@@ -253,8 +253,14 @@ func skipBraced(data []byte, i int) (int, bool) {
 }
 
 // bracedRun returns the index of the first quote, opener or closer of opener at
-// or after data[j], or len(data).
+// or after data[j], or len(data). It tests data[j] alone first, so a run that stops
+// at once, as between nested brackets, loads no word.
 func bracedRun(data []byte, j int, opener byte) int {
+	if j < len(data) {
+		if c := data[j]; c == '"' || c == opener || c == closerOf(opener) {
+			return j
+		}
+	}
 	open, shut := swarLo*uint64(opener), swarLo*uint64(closerOf(opener))
 	for range (len(data) - j) / wordSize {
 		w := load64(data, j)
