@@ -51,8 +51,7 @@ func bodyByte(c byte) bool {
 	return c >= ' ' && c != '"' && c != '\\'
 }
 
-// bodyMask flags the bytes of w that are not body bytes; its lowest flag is
-// exact, as plainMask's is.
+// bodyMask flags the bytes of w that are not body bytes; its lowest flag is exact.
 func bodyMask(w uint64) uint64 {
 	return (w-swarSpace)&^w&swarHi | zeroLanes(w^swarQuote) | zeroLanes(w^swarBackslash)
 }
@@ -65,8 +64,9 @@ func firstLane(m uint64) int {
 
 // plainRun returns the index of the first byte at or after data[j] that is not plain,
 // or len(data). It tests data[j] alone, so a run that stops at once costs no word, then
-// the words past it; after one or more, the word that ends data covers a plain tail.
+// the words past it; if a word fits from data[j], the last word of data covers a tail.
 func plainRun(data []byte, j int) int {
+	whole := len(data)-j >= wordSize
 	if j != len(data) {
 		if !plainByte(data[j]) {
 			return j
@@ -80,7 +80,7 @@ func plainRun(data []byte, j int) int {
 		}
 		j += wordSize
 	}
-	if words > 0 && plainWord(load64(data, len(data)-wordSize)) {
+	if whole && plainWord(load64(data, len(data)-wordSize)) {
 		return len(data)
 	}
 	return plainBytes(data, j)
