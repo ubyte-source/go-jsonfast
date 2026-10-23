@@ -449,9 +449,14 @@ func deepRecord(levels int) string {
 	var sb strings.Builder
 	for n := range levels {
 		id := strconv.Itoa(n)
-		sb.WriteString(`{"s` + id + `":"x","v` + id + `":[1,2],"k":`)
+		sb.WriteString(`{"s`)
+		sb.WriteString(id)
+		sb.WriteString(`":"x","v`)
+		sb.WriteString(id)
+		sb.WriteString(`":[1,2],"k":`)
 	}
-	sb.WriteString(emptyObject + strings.Repeat("}", levels))
+	sb.WriteString(emptyObject)
+	sb.WriteString(strings.Repeat("}", levels))
 	return sb.String()
 }
 

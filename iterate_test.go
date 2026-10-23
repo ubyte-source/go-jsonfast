@@ -360,7 +360,10 @@ func manyMembers(n, dup int) string {
 		if i == n-1 && dup >= 0 {
 			name = dup
 		}
-		sb.WriteString(`"k` + strconv.Itoa(name) + `":` + strconv.Itoa(i))
+		sb.WriteString(`"k`)
+		sb.WriteString(strconv.Itoa(name))
+		sb.WriteString(`":`)
+		sb.WriteString(strconv.Itoa(i))
 	}
 	sb.WriteByte('}')
 	return sb.String()
@@ -1333,7 +1336,8 @@ func ExampleWalkTokens() {
 				out.WriteByte(' ')
 			}
 			if name != "" {
-				out.WriteString(name + ":")
+				out.WriteString(name)
+				out.WriteByte(':')
 			}
 			out.WriteString(token)
 			return nil
@@ -1604,7 +1608,9 @@ func BenchmarkIterateStringArray(b *testing.B) {
 		if i > 0 {
 			sb.WriteByte(',')
 		}
-		sb.WriteString(`"id-` + strconv.Itoa(i) + `-item"`)
+		sb.WriteString(`"id-`)
+		sb.WriteString(strconv.Itoa(i))
+		sb.WriteString(`-item"`)
 	}
 	sb.WriteByte(']')
 	data := []byte(sb.String())

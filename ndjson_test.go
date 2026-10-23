@@ -142,7 +142,8 @@ func FuzzBatchWriterAppend(f *testing.F) {
 		records := lengthPrefixed(data)
 		var want strings.Builder
 		for _, record := range records {
-			want.WriteString(record + newline)
+			want.WriteString(record)
+			want.WriteString(newline)
 		}
 		for _, w := range []*BatchWriter{NewBatchWriter(1), AcquireBatchWriter()} {
 			for range 2 {
