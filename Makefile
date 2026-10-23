@@ -64,8 +64,8 @@ race: ## Run the tests of both builds with the race detector and write their cov
 cover: race ## Write coverage.html from the race run; fail when either build covers less than 100%
 	$(GO) tool cover -html=coverage.out -o coverage.html
 	@for f in coverage.out coverage-purego.out; do \
-		$(GO) tool cover -func=$$f | awk -v f=$$f '$$1 == "total:" {print f, $$3; full = $$3 == "100.0%"} \
-			END {exit !full}' || exit 1; \
+		$(GO) tool cover -func=$$f | awk -v f=$$f '$$1 == "total:" {print f, $$3}'; \
+		awk -v f=$$f 'NR > 1 && $$2 > 0 && $$3 == 0 {print f ": not covered:", $$1; missed = 1} END {exit missed}' $$f || exit 1; \
 	done
 
 bench: ## Run every benchmark of the default and the purego build
