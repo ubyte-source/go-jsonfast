@@ -184,26 +184,17 @@ const (
 	hexEscapeDigits  = 4
 )
 
-// runeAt decodes what starts at data[i], a byte cleanRun stops at other than a
-// quote: an escape, a byte no body holds, which is malformedRune, or a byte
-// utf8.DecodeRune rejects, which is badRune; either is one byte long.
+// runeAt decodes what starts at data[i], a byte cleanRun stops at other than a quote
+// or a short escape: a backslash by unicodeRune, or one byte, malformedRune when no
+// body holds it and badRune when utf8.DecodeRune rejects it.
 func runeAt(data []byte, i int) (r rune, n int) {
 	switch c := data[i]; {
 	case c == '\\':
-		return escapeAt(data, i)
+		return unicodeRune(data, i)
 	case !bodyByte(c):
 		return malformedRune, 1
 	}
 	return badRune, 1
-}
-
-// escapeAt decodes the escape at data[j], a backslash: a short escape, else a
-// \u escape by unicodeRune.
-func escapeAt(data []byte, j int) (r rune, n int) {
-	if b := shortEscape(data, j); b != 0 {
-		return rune(b), shortEscapeLen
-	}
-	return unicodeRune(data, j)
 }
 
 // shortEscape returns the byte that the two-byte escape at data[j] stands for,
@@ -321,8 +312,18 @@ func matchedPrefix(d []byte, i int, s []byte) (stop int, equal bool) {
 			return k, false
 		}
 		i, j = k, j+k-i
-		if i == len(d) || d[i] == '"' {
-			return i, i < len(d) && j == len(s)
+		switch {
+		case i == len(d):
+			return i, false
+		case d[i] == '"':
+			return i, j == len(s)
+		}
+		if b := shortEscape(d, i); b != 0 {
+			if j == len(s) || s[j] != b {
+				return i + shortEscapeLen, false
+			}
+			i, j = i+shortEscapeLen, j+1
+			continue
 		}
 		r, n := runeAt(d, i)
 		if r == malformedRune {

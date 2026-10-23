@@ -501,7 +501,7 @@ func TestArenaStrictTokenCopiesNothingBeforeALateFault(t *testing.T) {
 	})
 }
 
-func TestEscapeAtDecodesEveryLetter(t *testing.T) {
+func TestShortEscapeDecodesEveryLetter(t *testing.T) {
 	letters := map[byte]byte{'"': '"', '\\': '\\', '/': '/', 'b': '\b', 'f': '\f', 'n': '\n', 'r': '\r', 't': '\t'}
 	for n := range math.MaxUint8 + 1 {
 		c := byte(n)
@@ -509,12 +509,12 @@ func TestEscapeAtDecodesEveryLetter(t *testing.T) {
 		if got := unescapeByte(c); got != want || (got != 0) != ok {
 			t.Errorf("unescapeByte(%q) = %q, want %q", c, got, want)
 		}
-		wantRune, wantSize := malformedRune, 1
-		if ok {
-			wantRune, wantSize = rune(want), len(`\n`)
+		escape := []byte{'\\', c}
+		if got := shortEscape(escape, 0); got != want {
+			t.Errorf("shortEscape(\\%c) = %q, want %q", c, got, want)
 		}
-		if r, size := escapeAt([]byte{'\\', c}, 0); c != 'u' && (r != wantRune || size != wantSize) {
-			t.Errorf("escapeAt(\\%c) = %q, %d, want %q, %d", c, r, size, wantRune, wantSize)
+		if r, size := unicodeRune(escape, 0); r != malformedRune || size != 1 {
+			t.Errorf("unicodeRune(\\%c) = %q, %d, want malformedRune, 1: no \\u escape is two bytes long", c, r, size)
 		}
 	}
 }
