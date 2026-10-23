@@ -63,6 +63,9 @@ func appendUTF8(dst, p []byte, i int) (out []byte, next int) {
 	return append(dst, p[i:j]...), j
 }
 
+// hexBase is the base of the \u escape digits.
+const hexBase = 16
+
 // lowerHex holds the digits of a \u00XX escape.
 const lowerHex = "0123456789abcdef"
 

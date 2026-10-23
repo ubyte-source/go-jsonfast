@@ -2,6 +2,8 @@ package jsonfast
 
 import (
 	"bytes"
+	"encoding/binary"
+	"math"
 	"slices"
 	"unicode/utf16"
 	"unicode/utf8"
@@ -179,53 +181,39 @@ const (
 // surrogate pair of two such escapes, and the hex digits of one.
 const (
 	shortEscapeLen   = 2
-	unicodeEscapeLen = 6
+	unicodeEscapeLen = len(`\u`) + hexEscapeDigits
 	pairEscapeLen    = 2 * unicodeEscapeLen
 	hexEscapeDigits  = 4
 )
 
-// runeAt decodes what starts at data[i], a byte cleanRun stops at other than a quote
-// or a short escape: a backslash by unicodeRune, or one byte, malformedRune when no
-// body holds it and badRune when utf8.DecodeRune rejects it.
+// runeAt decodes what a string scan stops at that is no quote or short escape: a \u
+// escape, a surrogate pair of two, or a byte, malformedRune when no body holds it and
+// badRune when utf8.DecodeRune rejects it, as for a lone surrogate half.
 func runeAt(data []byte, i int) (r rune, n int) {
-	switch c := data[i]; {
-	case c == '\\':
-		return unicodeRune(data, i)
-	case !bodyByte(c):
-		return malformedRune, 1
-	}
-	return badRune, 1
-}
-
-// shortEscape returns the byte that the two-byte escape at data[j] stands for,
-// or 0 when none starts there: \u takes four hex digits, which unicodeRune reads.
-func shortEscape(data []byte, j int) byte {
-	if data[j] != '\\' || j+1 == len(data) || data[j+1] == 'u' {
-		return 0
-	}
-	return unescapeByte(data[j+1])
-}
-
-// unicodeRune decodes the \u escape at data[j], a backslash. A surrogate pair
-// joins into one code point and any other surrogate half decodes to badRune; a
-// malformed escape is malformedRune, one byte long.
-func unicodeRune(data []byte, j int) (r rune, n int) {
-	if j+1 == len(data) || data[j+1] != 'u' {
-		return malformedRune, 1
-	}
-	hi, ok := hex4(data, j+len(`\u`))
+	hi, ok := unicodeEscape(data, i)
 	switch {
+	case !ok && bodyByte(data[i]):
+		return badRune, 1
 	case !ok:
 		return malformedRune, 1
 	case !utf16.IsSurrogate(hi):
 		return hi, unicodeEscapeLen
 	}
-	if lo, ok := unicodeEscape(data, j+unicodeEscapeLen); ok {
+	if lo, ok := unicodeEscape(data, i+unicodeEscapeLen); ok {
 		if r = utf16.DecodeRune(hi, lo); r != utf8.RuneError {
 			return r, pairEscapeLen
 		}
 	}
 	return badRune, unicodeEscapeLen
+}
+
+// shortEscape returns the byte that the two-byte escape at data[j] stands for,
+// or 0 when none starts there: \u takes four hex digits, which runeAt reads.
+func shortEscape(data []byte, j int) byte {
+	if data[j] != '\\' || j+1 == len(data) || data[j+1] == 'u' {
+		return 0
+	}
+	return unescapeByte(data[j+1])
 }
 
 // unescapeByte returns the byte that the two-byte escape with letter c stands
@@ -250,46 +238,55 @@ func unescapeByte(c byte) byte {
 
 // unicodeEscape parses the \uXXXX escape at data[j], j at most len(data).
 func unicodeEscape(data []byte, j int) (rune, bool) {
-	if j == len(data) || data[j] != '\\' || j+1 == len(data) || data[j+1] != 'u' {
+	e := data[j:min(j+unicodeEscapeLen, len(data))]
+	if len(e) != unicodeEscapeLen || e[0] != '\\' || e[1] != 'u' {
 		return 0, false
 	}
-	return hex4(data, j+len(`\u`))
+	return hex4(e[len(`\u`):])
 }
-
-// hexBase is the base of the \u escape digits.
-const hexBase = 16
 
 // hexLetterValue is the value of the hex digits a and A.
 const hexLetterValue = 0xa
 
-// hex4 parses the four hex digits at data[j], j at most len(data).
-func hex4(data []byte, j int) (rune, bool) {
-	digits := data[j:min(j+hexEscapeDigits, len(data))]
-	if len(digits) != hexEscapeDigits {
+// hexDigitBits is the width of the value of one hex digit.
+const hexDigitBits = 4
+
+// The words of hex4, one byte per digit: each byte of each constant holds the named
+// value, and hexPairs the low byte of each half.
+const (
+	hexLanes  uint32 = 0x01010101
+	hexTops          = hexLanes * utf8.RuneSelf
+	hexCase          = hexLanes * ('a' - 'A')
+	hexNibble        = hexLanes * (1<<hexDigitBits - 1)
+	hexPairs  uint32 = 0x00ff00ff
+)
+
+// Added to a word of bytes below utf8.RuneSelf, each sets the high bit of every byte
+// that is the named character or more: hexFrom0 '0', hexPast9 the one after '9',
+// hexFromA 'a' and hexPastF the one after 'f'.
+const (
+	hexFrom0 = hexTops - hexLanes*'0'
+	hexPast9 = hexTops - hexLanes*('9'+1)
+	hexFromA = hexTops - hexLanes*'a'
+	hexPastF = hexTops - hexLanes*('f'+1)
+)
+
+// letterBit is the bit that the letters a to f and A to F have and the digits lack.
+const letterBit = 6
+
+// hex4 parses digits, four hex digits, as one word: each byte is a digit from '0' to
+// '9' or, lowered, a letter from 'a' to 'f', which has letterBit and is worth its low
+// nibble plus 9; a byte from utf8.RuneSelf up is neither, whatever it carries.
+func hex4(digits []byte) (rune, bool) {
+	w := binary.BigEndian.Uint32(digits)
+	digit := (w + hexFrom0) &^ (w + hexPast9)
+	letter := ((w | hexCase) + hexFromA) &^ ((w | hexCase) + hexPastF)
+	if (digit|letter)&hexTops != hexTops {
 		return 0, false
 	}
-	var r rune
-	for _, c := range digits {
-		v, ok := hexDigit(c)
-		if !ok {
-			return 0, false
-		}
-		r = r*hexBase + v
-	}
-	return r, true
-}
-
-// hexDigit reports false for a byte that is no hex digit.
-func hexDigit(c byte) (rune, bool) {
-	switch {
-	case isDigit(c):
-		return rune(c - '0'), true
-	case 'a' <= c && c <= 'f':
-		return rune(c-'a') + hexLetterValue, true
-	case 'A' <= c && c <= 'F':
-		return rune(c-'A') + hexLetterValue, true
-	}
-	return 0, false
+	v := w&hexNibble + (w>>letterBit&hexLanes)*(hexLetterValue-1)
+	v = (v | v>>hexDigitBits) & hexPairs
+	return rune((v | v>>byteBits) & math.MaxUint16), true
 }
 
 // EqualString reports whether raw is one JSON string whose decoded content

@@ -216,7 +216,7 @@ func bodyEnd(data []byte, j int, rule stringRule) (int, bool) {
 			j += shortEscapeLen
 			continue
 		}
-		r, n := unicodeRune(data, j)
+		r, n := runeAt(data, j)
 		if !rule.keeps(r) {
 			return 0, false
 		}

@@ -516,18 +516,22 @@ func TestShortEscapeDecodesEveryLetter(t *testing.T) {
 		if got := shortEscape(escape, 0); got != want {
 			t.Errorf("shortEscape(\\%c) = %q, want %q", c, got, want)
 		}
-		if r, size := unicodeRune(escape, 0); r != malformedRune || size != 1 {
-			t.Errorf("unicodeRune(\\%c) = %q, %d, want malformedRune, 1: no \\u escape is two bytes long", c, r, size)
+		if r, size := runeAt(escape, 0); r != malformedRune || size != 1 {
+			t.Errorf("runeAt(\\%c) = %q, %d, want malformedRune, 1: no \\u escape is two bytes long", c, r, size)
 		}
 	}
 }
 
-func TestHexDigitMatchesStrconv(t *testing.T) {
-	for n := range math.MaxUint8 + 1 {
-		c := byte(n)
-		want, err := strconv.ParseInt(string([]byte{c}), hexRadix, intBits)
-		if got, ok := hexDigit(c); !sameScalar(int64(got), ok, want, err == nil) {
-			t.Errorf("hexDigit(%q) = %d, %v; strconv = %d, %v", c, got, ok, want, err)
+func TestHex4MatchesStrconv(t *testing.T) {
+	for lane := range hexEscapeDigits - 1 {
+		for n := range math.MaxUint16 + 1 {
+			in := []byte("0aF9")
+			in[lane], in[lane+1] = byte(n), byte(n>>byteBits)
+			// A leading zero makes strconv refuse a sign, which is no hex digit.
+			want, err := strconv.ParseInt("0"+string(in), hexRadix, intBits)
+			if got, ok := hex4(in); !sameScalar(int64(got), ok, want, err == nil) {
+				t.Fatalf("hex4(%q) = %#x, %v; strconv = %#x, %v", in, got, ok, want, err)
+			}
 		}
 	}
 }
