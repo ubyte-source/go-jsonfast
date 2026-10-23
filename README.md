@@ -269,122 +269,129 @@ Errors never carry input bytes, and their wording is the caller's to choose.
 
 ## Benchmarks
 
-Medians of six runs of `go test -run '^$' -bench . -benchmem -count 6` with Go 1.25.9 on
-linux/amd64, an Intel Xeon Gold 6442Y with GOMAXPROCS 32 on a shared host, default build, no
-PGO. `ValidUTF8EncodingJSON` runs `json.Valid` on the input of `ValidUTF8`,
+Medians of six runs of `go test -run '^$' -bench . -benchmem -count 6` with Go 1.27.3 on
+linux/amd64, an Intel Xeon Gold 6442Y pinned to 11 cores with GOMAXPROCS 11 on a shared host,
+default build, no PGO. `ValidUTF8EncodingJSON` runs `json.Valid` on the input of `ValidUTF8`,
 `BuilderAppendInt64Strconv` runs `strconv.AppendInt` on the values of `BuilderAppendInt64`,
-`DecodeInt64Strconv` and `DecodeUint64Strconv` read the texts of `DecodeInt64` and
-`DecodeUint64` with `strconv.ParseInt` and `strconv.ParseUint`, `TrimWSBytesTrim` trims the
-input of `TrimWS` with `bytes.Trim`, `BuilderAddTimeRFC3339FieldTimeAppendFormat` writes the
-field of `BuilderAddTimeRFC3339Field` with `time.Time.AppendFormat`, `PlainRunSharedForm` and
+`DecodeInt64Strconv` and `DecodeUint64Strconv` read the texts of `DecodeInt64` and `DecodeUint64`
+with `strconv.ParseInt` and `strconv.ParseUint`, `TrimWSBytesTrim` trims the input of `TrimWS`
+with `bytes.Trim`, `BuilderAddTimeRFC3339FieldTimeAppendFormat` writes the field of
+`BuilderAddTimeRFC3339Field` with `time.Time.AppendFormat`, `PlainRunSharedForm` and
 `BodyRunSharedForm` run the inputs of `PlainRun` and `BodyRun` through one generic form of both,
-and `SkipNameSharedForm` and `StrictEndSharedForm` read the inputs of `SkipName` and `StrictEnd`
-with `strictName` and `strictToken`, which also decode them. The cases that allocate are the
-ones that decode or copy by design: strings and names with escapes, `EscapeString` with escapes,
-`Build`, whose copy is the result, `DecodeValue`, whose Go values are the result, and
-`FlattenObject/Deep64`, whose 126 leaf names pass the 32 its leaf name set holds inline and
-whose 63 objects that hold an object take a name set each.
+`SkipNameSharedForm` and `StrictEndSharedForm` read the inputs of `SkipName` and `StrictEnd` with
+`strictName` and `strictToken`, which also decode them, and `StringEndGenericForm` and
+`StrictEndGenericForm` read the inputs of `StringEnd` and `StrictEnd` through one generic form of
+both. The cases that allocate are the ones that decode or copy by design: strings and names with
+escapes, `EscapeString` with escapes, `Build`, whose copy is the result, `DecodeValue`, whose Go
+values are the result, and `FlattenObject/Deep64`, whose 126 leaf names pass the 32 its leaf name
+set holds inline and whose 63 objects that hold an object take a name set each.
 
 | Benchmark | ns/op | MB/s | B/op | allocs/op |
 |-----------|------:|-----:|-----:|----------:|
-| `BuilderAddStringField` | 108 |  | 0 | 0 |
-| `BuilderSyslogObject` | 256 |  | 0 | 0 |
-| `BuilderArray` | 1,823 |  | 0 | 0 |
-| `BuilderFields` | 382 | 482 | 0 | 0 |
-| `BuilderElements` | 212 | 538 | 0 | 0 |
-| `BuilderAppendRaw` | 7.75 | 1,678 | 0 | 0 |
-| `DecodeStringView/Clean` | 21.9 | 2,746 | 0 | 0 |
-| `DecodeStringView/Escaped` | 140 | 471 | 80 | 1 |
-| `DecodeStringView/Unicode` | 512 | 398 | 208 | 1 |
-| `DecodeString/Clean` | 22.9 | 2,619 | 0 | 0 |
-| `DecodeString/Escaped` | 142 | 463 | 80 | 1 |
-| `DecodeString/Unicode` | 532 | 383 | 208 | 1 |
-| `EqualString/Clean` | 26.5 | 2,265 | 0 | 0 |
-| `EqualString/Escaped` | 119 | 554 | 0 | 0 |
-| `EqualString/Unicode` | 447 | 457 | 0 | 0 |
-| `DecodeBool` | 2.05 |  | 0 | 0 |
-| `DecodeInt64` | 27.9 |  | 0 | 0 |
-| `DecodeInt64Strconv` | 57.4 |  | 0 | 0 |
-| `DecodeUint64` | 33.3 |  | 0 | 0 |
-| `DecodeUint64Strconv` | 54.3 |  | 0 | 0 |
-| `DecodeFloat64` | 76.6 |  | 0 | 0 |
-| `DecodeFloat32` | 70.8 |  | 0 | 0 |
-| `IsNumber` | 15.0 |  | 0 | 0 |
-| `BuilderAppendEscaped/Short` | 12.5 | 321 | 0 | 0 |
-| `BuilderAppendEscaped/Field` | 11.6 | 1,463 | 0 | 0 |
-| `BuilderAppendEscaped/ASCII` | 24.9 | 3,327 | 0 | 0 |
-| `BuilderAppendEscaped/Escapes` | 77.0 | 870 | 0 | 0 |
-| `BuilderAppendEscaped/Unicode` | 97.7 | 840 | 0 | 0 |
-| `BuilderAppendEscaped/Long` | 1,132 | 2,769 | 0 | 0 |
-| `BuilderAppendEscapedString/Short` | 14.9 | 268 | 0 | 0 |
-| `BuilderAppendEscapedString/Field` | 15.4 | 1,102 | 0 | 0 |
-| `BuilderAppendEscapedString/ASCII` | 29.5 | 2,809 | 0 | 0 |
-| `BuilderAppendEscapedString/Escapes` | 90.7 | 794 | 0 | 0 |
-| `BuilderAppendEscapedString/Unicode` | 107 | 767 | 0 | 0 |
-| `BuilderAppendEscapedString/Long` | 1,236 | 2,590 | 0 | 0 |
-| `EscapeString/Plain` | 16.3 | 4,056 | 0 | 0 |
-| `EscapeString/Escapes` | 100 | 478 | 64 | 1 |
-| `FieldKeySyslogObject` | 141 |  | 0 | 0 |
-| `FieldKeyFields` | 626 | 412 | 0 | 0 |
-| `FlattenObject/Record` | 350 | 330 | 0 | 0 |
-| `FlattenObject/Deep64` | 23,282 | 75.0 | 87,416 | 11 |
-| `KindOf` | 6.46 |  | 0 | 0 |
-| `BatchWriterAppend` | 128 | 10,285 | 0 | 0 |
-| `BatchWriterAppendString` | 125 | 10,483 | 0 | 0 |
-| `BuilderAppendInt64/7` | 3.82 |  | 0 | 0 |
-| `BuilderAppendInt64/512` | 5.90 |  | 0 | 0 |
-| `BuilderAppendInt64/1705321845` | 18.6 |  | 0 | 0 |
-| `BuilderAppendInt64/-9223372036854775808` | 25.8 |  | 0 | 0 |
-| `BuilderAppendInt64Strconv/7` | 5.70 |  | 0 | 0 |
-| `BuilderAppendInt64Strconv/512` | 11.7 |  | 0 | 0 |
-| `BuilderAppendInt64Strconv/1705321845` | 16.3 |  | 0 | 0 |
-| `BuilderAppendInt64Strconv/-9223372036854775808` | 24.8 |  | 0 | 0 |
-| `BuilderAppendFloat64/Integral` | 16.6 |  | 0 | 0 |
-| `BuilderAppendFloat64/Fraction` | 71.6 |  | 0 | 0 |
-| `BuilderAppendFloat64/Exponent` | 61.1 |  | 0 | 0 |
-| `Acquire` | 46.5 |  | 0 | 0 |
-| `AcquireParallel` | 5.95 |  | 0 | 0 |
-| `Build` | 55.3 |  | 16 | 1 |
-| `AcquireBatchWriterParallel` | 12.0 |  | 0 | 0 |
-| `TrimWS` | 9.78 | 1,534 | 0 | 0 |
-| `TrimWSBytesTrim` | 25.9 | 580 | 0 | 0 |
-| `SkipValueAt` | 128 | 470 | 0 | 0 |
-| `SkipStringAt` | 33.7 | 1,873 | 0 | 0 |
-| `SkipBraced` | 157 | 465 | 0 | 0 |
-| `IterateFields` | 174 | 576 | 0 | 0 |
-| `IterateMembers/Plain` | 219 | 457 | 0 | 0 |
-| `IterateMembers/Escaped` | 449 | 120 | 64 | 1 |
-| `IterateMembers/Names32` | 1,086 | 248 | 0 | 0 |
-| `IterateObject/Plain` | 273 | 367 | 0 | 0 |
-| `IterateObject/Nested` | 651 | 478 | 0 | 0 |
-| `IterateObject/Names32` | 1,325 | 203 | 0 | 0 |
-| `IterateDocument/Flat` | 1,101 | 90.8 | 0 | 0 |
-| `IterateDocument/Nested` | 1,044 | 89.1 | 0 | 0 |
-| `WalkTokens/Flat` | 648 | 154 | 0 | 0 |
-| `WalkTokens/Nested` | 1,238 | 75.1 | 0 | 0 |
-| `SkipName` | 75.7 | 291 | 0 | 0 |
-| `SkipNameSharedForm` | 157 | 140 | 24 | 1 |
-| `IterateArray` | 145 | 270 | 0 | 0 |
-| `IterateStringArray` | 2,684 | 481 | 0 | 0 |
-| `FindMember` | 331 | 251 | 0 | 0 |
-| `FindElement` | 165 | 249 | 0 | 0 |
-| `PlainRun` | 59.6 | 4,317 | 0 | 0 |
-| `PlainRunSharedForm` | 104 | 2,465 | 0 | 0 |
-| `BodyRun` | 63.9 | 4,525 | 0 | 0 |
-| `BodyRunSharedForm` | 183 | 1,583 | 0 | 0 |
-| `BuilderAddTimeRFC3339Field` | 57.9 |  | 0 | 0 |
-| `BuilderAddTimeRFC3339Element` | 97.2 | 690 | 0 | 0 |
-| `BuilderAddTimeRFC3339FieldTimeAppendFormat` | 62.6 |  | 0 | 0 |
-| `BuilderAddTimeRFC3339OffsetField` | 72.2 |  | 0 | 0 |
-| `ValidUTF8EncodingJSON` | 976 | 319 | 0 | 0 |
-| `ValidUTF8` | 591 | 526 | 0 | 0 |
-| `StrictEnd` | 56.2 | 409 | 0 | 0 |
-| `StrictEndSharedForm` | 154 | 150 | 24 | 1 |
-| `WalkStrings` | 867 | 359 | 224 | 1 |
-| `DecodeValue/String` | 1,266 | 73 | 840 | 13 |
-| `DecodeValue/Bytes` | 1,432 | 65 | 936 | 14 |
-| `BuilderAddValueElement` | 665 | 140 | 0 | 0 |
-| `BuilderAddValueField` | 699 | 147 | 0 | 0 |
+| `BuilderAddStringField` | 92.4 | 531 | 0 | 0 |
+| `BuilderSyslogObject` | 228 | 1,025 | 0 | 0 |
+| `BuilderArray` | 1,200 | 464 | 0 | 0 |
+| `BuilderFields` | 332 | 553 | 0 | 0 |
+| `BuilderElements` | 155 | 735 | 0 | 0 |
+| `BuilderAppendRaw` | 6.54 | 1,987 | 0 | 0 |
+| `DecodeStringView/Clean` | 21.1 | 2,838 | 0 | 0 |
+| `DecodeStringView/Escaped` | 97.1 | 680 | 80 | 1 |
+| `DecodeStringView/Unicode` | 413 | 494 | 208 | 1 |
+| `DecodeStringView/UnicodeEscapes` | 1,044 | 362 | 384 | 1 |
+| `DecodeString/Clean` | 21.2 | 2,829 | 0 | 0 |
+| `DecodeString/Escaped` | 105 | 626 | 80 | 1 |
+| `DecodeString/Unicode` | 441 | 463 | 208 | 1 |
+| `DecodeString/UnicodeEscapes` | 1,147 | 330 | 384 | 1 |
+| `EqualString/Clean` | 25.2 | 2,380 | 0 | 0 |
+| `EqualString/Escaped` | 67.1 | 983 | 0 | 0 |
+| `EqualString/Unicode` | 348 | 586 | 0 | 0 |
+| `EqualString/UnicodeEscapes` | 1,010 | 374 | 0 | 0 |
+| `DecodeBool` | 1.75 |  | 0 | 0 |
+| `DecodeInt64` | 26.6 |  | 0 | 0 |
+| `DecodeInt64Strconv` | 29.9 |  | 0 | 0 |
+| `DecodeUint64` | 31.4 |  | 0 | 0 |
+| `DecodeUint64Strconv` | 31.3 |  | 0 | 0 |
+| `DecodeFloat64` | 67.8 |  | 0 | 0 |
+| `DecodeFloat32` | 60.0 |  | 0 | 0 |
+| `IsNumber` | 13.0 |  | 0 | 0 |
+| `BuilderAppendEscaped/Short` | 12.0 | 333 | 0 | 0 |
+| `BuilderAppendEscaped/Field` | 12.1 | 1,405 | 0 | 0 |
+| `BuilderAppendEscaped/ASCII` | 24.7 | 3,357 | 0 | 0 |
+| `BuilderAppendEscaped/Escapes` | 54.6 | 1,318 | 0 | 0 |
+| `BuilderAppendEscaped/Unicode` | 72.7 | 1,129 | 0 | 0 |
+| `BuilderAppendEscaped/Long` | 1,018 | 3,143 | 0 | 0 |
+| `BuilderAppendEscapedString/Short` | 12.2 | 329 | 0 | 0 |
+| `BuilderAppendEscapedString/Field` | 12.9 | 1,320 | 0 | 0 |
+| `BuilderAppendEscapedString/ASCII` | 32.1 | 2,594 | 0 | 0 |
+| `BuilderAppendEscapedString/Escapes` | 60.8 | 1,185 | 0 | 0 |
+| `BuilderAppendEscapedString/Unicode` | 91.3 | 899 | 0 | 0 |
+| `BuilderAppendEscapedString/Long` | 1,048 | 3,055 | 0 | 0 |
+| `EscapeString/Plain` | 17.1 | 3,864 | 0 | 0 |
+| `EscapeString/Escapes` | 80.3 | 598 | 64 | 1 |
+| `FieldKeySyslogObject` | 141 | 1,657 | 0 | 0 |
+| `FieldKeyFields` | 653 | 395 | 0 | 0 |
+| `FlattenObject/Record` | 656 | 177 | 0 | 0 |
+| `FlattenObject/Deep64` | 65,050 | 27 | 87,416 | 11 |
+| `KindOf` | 5.65 |  | 0 | 0 |
+| `BatchWriterAppend` | 111 | 11,818 | 0 | 0 |
+| `BatchWriterAppendString` | 119 | 10,996 | 0 | 0 |
+| `BuilderAppendInt64/7` | 4.43 | 226 | 0 | 0 |
+| `BuilderAppendInt64/512` | 4.52 | 664 | 0 | 0 |
+| `BuilderAppendInt64/1705321845` | 13.8 | 722 | 0 | 0 |
+| `BuilderAppendInt64/-9223372036854775808` | 20.3 | 983 | 0 | 0 |
+| `BuilderAppendInt64Strconv/7` | 6.69 | 149 | 0 | 0 |
+| `BuilderAppendInt64Strconv/512` | 12.2 | 245 | 0 | 0 |
+| `BuilderAppendInt64Strconv/1705321845` | 14.4 | 694 | 0 | 0 |
+| `BuilderAppendInt64Strconv/-9223372036854775808` | 17.7 | 1,129 | 0 | 0 |
+| `BuilderAppendFloat64/Integral` | 15.0 | 666 | 0 | 0 |
+| `BuilderAppendFloat64/Fraction` | 44.0 | 387 | 0 | 0 |
+| `BuilderAppendFloat64/Exponent` | 38.7 | 543 | 0 | 0 |
+| `Acquire` | 67.3 |  | 0 | 0 |
+| `AcquireParallel` | 11.9 |  | 0 | 0 |
+| `Build` | 58.9 |  | 16 | 1 |
+| `AcquireBatchWriterParallel` | 28.1 |  | 0 | 0 |
+| `TrimWS` | 10.0 | 1,493 | 0 | 0 |
+| `TrimWSBytesTrim` | 20.8 | 720 | 0 | 0 |
+| `SkipValueAt` | 91.8 | 653 | 0 | 0 |
+| `SkipStringAt` | 24.1 | 2,619 | 0 | 0 |
+| `SkipBraced` | 128 | 570 | 0 | 0 |
+| `IterateFields` | 169 | 592 | 0 | 0 |
+| `IterateMembers/Plain` | 205 | 488 | 0 | 0 |
+| `IterateMembers/Escaped` | 263 | 205 | 64 | 1 |
+| `IterateMembers/Names32` | 1,032 | 261 | 0 | 0 |
+| `IterateObject/Plain` | 323 | 309 | 0 | 0 |
+| `IterateObject/Nested` | 778 | 400 | 0 | 0 |
+| `IterateObject/Names32` | 1,526 | 176 | 0 | 0 |
+| `IterateDocument/Flat` | 364 | 275 | 0 | 0 |
+| `IterateDocument/Nested` | 506 | 184 | 0 | 0 |
+| `WalkTokens/Flat` | 413 | 242 | 0 | 0 |
+| `WalkTokens/Nested` | 565 | 164 | 0 | 0 |
+| `SkipName` | 35.5 | 619 | 0 | 0 |
+| `SkipNameSharedForm` | 87.0 | 253 | 24 | 1 |
+| `IterateArray` | 117 | 333 | 0 | 0 |
+| `IterateStringArray` | 1,460 | 887 | 0 | 0 |
+| `FindMember` | 136 | 609 | 0 | 0 |
+| `FindElement` | 110 | 372 | 0 | 0 |
+| `PlainRun` | 54.1 | 4,748 | 0 | 0 |
+| `PlainRunSharedForm` | 82.3 | 3,125 | 0 | 0 |
+| `BodyRun` | 60.4 | 4,787 | 0 | 0 |
+| `BodyRunSharedForm` | 94.1 | 3,070 | 0 | 0 |
+| `BuilderAddTimeRFC3339Field` | 53.9 | 816 | 0 | 0 |
+| `BuilderAddTimeRFC3339Element` | 95.6 | 701 | 0 | 0 |
+| `BuilderAddTimeRFC3339FieldTimeAppendFormat` | 57.1 | 771 | 0 | 0 |
+| `BuilderAddTimeRFC3339OffsetField` | 64.9 | 755 | 0 | 0 |
+| `ValidUTF8EncodingJSON` | 509 | 611 | 0 | 0 |
+| `ValidUTF8` | 675 | 461 | 0 | 0 |
+| `StringEnd` | 20.5 | 1,124 | 0 | 0 |
+| `StringEndGenericForm` | 25.2 | 914 | 0 | 0 |
+| `StrictEnd` | 28.3 | 814 | 0 | 0 |
+| `StrictEndSharedForm` | 69.0 | 334 | 24 | 1 |
+| `StrictEndGenericForm` | 30.9 | 744 | 0 | 0 |
+| `WalkStrings` | 946 | 329 | 224 | 1 |
+| `DecodeValue/String` | 1,118 | 83 | 840 | 13 |
+| `DecodeValue/Bytes` | 1,236 | 75 | 936 | 14 |
+| `BuilderAddValueElement` | 676 | 138 | 0 | 0 |
+| `BuilderAddValueField` | 720 | 143 | 0 | 0 |
 
 ## Testing and gates
 
