@@ -102,7 +102,7 @@ func validityCases() []validityCase {
 		{`{"a" : 1 , "b" : [ 2 ] }`, true}, {repeatedA, true}, {"\"\x7f\"", true},
 		{"\"\xff\xfe\"", true}, {loneHigh, true}, {`{"\udc00":"\ud800x"}`, true},
 		{`"\u00e9\/\b\f\n\r\t\\\"\u0000"`, true}, {`"\u12"`, false}, {`"\u123`, false}, {`"\ud800\u12"`, false},
-		{``, false}, {blank, false}, {`{`, false}, {`[`, false},
+		{`"\ud800`, false}, {``, false}, {blank, false}, {`{`, false}, {`[`, false},
 		{`}`, false}, {`]`, false}, {`[}`, false}, {`{]`, false}, {`[1}`, false},
 		{`{"a":1]`, false}, {`[[]`, false}, {`[]]`, false}, {`{}{}`, false}, {`[] []`, false},
 		{`1 2`, false}, {`"a" "b"`, false}, {`[1,]`, false}, {`[,1]`, false}, {`[1 2]`, false},

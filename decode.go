@@ -55,8 +55,7 @@ type strStatus uint8
 const (
 	strMalformed strStatus = iota // no string by the rule the token is read by
 	strView                       // nothing to decode: the value aliases the input
-	strDecoded                    // escapes decoded and nothing replaced
-	strReplaced                   // an invalid byte or lone surrogate became U+FFFD
+	strDecoded                    // decoded into the arena
 )
 
 // decodeToken decodes the string token that spans all of d.
@@ -140,13 +139,13 @@ func (a *arena) rewind(m arenaMark) {
 // ends at data[k], at the end of a's chunk in use, moving to new chunks of floor bytes
 // or more when it needs them, and checks what ends each run before it writes.
 func decodeFrom(a *arena, data []byte, j, k, floor int, rule stringRule) (v []byte, end int, st strStatus) {
-	v, st = a.buf[len(a.buf):], strDecoded
+	v = a.buf[len(a.buf):]
 	for {
 		switch {
 		case k == len(data):
 			return nil, 0, strMalformed
 		case data[k] == '"':
-			return append(a.grow(v, k-j, floor), data[j:k]...), k + 1, st
+			return append(a.grow(v, k-j, floor), data[j:k]...), k + 1, strDecoded
 		}
 		if b := shortEscape(data, k); b != 0 {
 			v = append(append(a.grow(v, k-j+1, floor), data[j:k]...), b)
@@ -155,11 +154,8 @@ func decodeFrom(a *arena, data []byte, j, k, floor int, rule stringRule) (v []by
 			continue
 		}
 		r, n := runeAt(data, k)
-		switch {
-		case !rule.keeps(r):
+		if !rule.keeps(r) {
 			return nil, 0, strMalformed
-		case r == badRune:
-			st = strReplaced
 		}
 		var enc [utf8.UTFMax]byte
 		size := utf8.EncodeRune(enc[:], r)

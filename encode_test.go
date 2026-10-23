@@ -187,10 +187,13 @@ func TestBuilderAddValueElementWritesSharedContainersEachTime(t *testing.T) {
 		deep = []any{deep}
 	}
 	wantTwice := `[[1],{"a":[1],"b":[1]},[1]]`
+	const prefixTail int64 = 7
+	prefix := make([]any, 2)
+	prefix[0], prefix[1] = prefix[:1], prefixTail
 	for _, tc := range []struct {
 		v    any
 		want string
-	}{{twice, wantTwice}, {deep, inArrays(wantTwice, deepCycle)}} {
+	}{{twice, wantTwice}, {deep, inArrays(wantTwice, deepCycle)}, {prefix, "[[null],7]"}} {
 		b := New(0)
 		b.AddValueElement(tc.v, numberText)
 		if got := string(b.Bytes()); got != tc.want {

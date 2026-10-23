@@ -102,6 +102,7 @@ func malformedTokens() []decodeCase {
 		{`"\ud800\u"`, "", false},
 		{`"\ud800\udc0"`, "", false},
 		{`"\ud800\`, "", false},
+		{`"\ud800`, "", false},
 		{`"\ud800\xdc00"`, "", false},
 	}
 }
@@ -295,8 +296,8 @@ func TestArenaTokenAtReportsTheOutcome(t *testing.T) {
 		{`"café"]`, cafe, "]", strView},
 		{`"caf\u00e9",`, cafe, ",", strDecoded},
 		{"\"\\n\xef\xbf\xbd\"", "\n\uFFFD", "", strDecoded},
-		{"\"a\xffb\"]", "a\uFFFDb", "]", strReplaced},
-		{loneHigh, "\uFFFD", "", strReplaced},
+		{"\"a\xffb\"]", "a\uFFFDb", "]", strDecoded},
+		{loneHigh, "\uFFFD", "", strDecoded},
 		{`"a\qb"`, "", `"a\qb"`, strMalformed},
 		{"\"a\x01\"", "", "\"a\x01\"", strMalformed},
 		{`"\n` + "\x01\"", "", `"\n` + "\x01\"", strMalformed},
@@ -487,8 +488,8 @@ func TestArenaStrictTokenStopsAtTheFirstRuneWithNoCodePoint(t *testing.T) {
 				raw, value, end, ok, len(a.buf))
 		}
 		value, end, st := tokenAt(&a, []byte(raw), 0, len(raw), anyBody)
-		if st != strReplaced || end != len(raw) || !strings.HasSuffix(string(value), strings.Repeat("\n", longRun)) {
-			t.Errorf("tokenAt(%.12q, anyBody) = %d bytes, %d, %d, want the whole token, %d, replaced",
+		if st != strDecoded || end != len(raw) || !strings.HasSuffix(string(value), strings.Repeat("\n", longRun)) {
+			t.Errorf("tokenAt(%.12q, anyBody) = %d bytes, %d, %d, want the whole token, %d, decoded",
 				raw, len(value), end, st, len(raw))
 		}
 	}
