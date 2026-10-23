@@ -247,7 +247,7 @@ func unescapeByte(c byte) byte {
 
 // unicodeEscape parses the \uXXXX escape at data[j], j at most len(data).
 func unicodeEscape(data []byte, j int) (rune, bool) {
-	if !bytes.HasPrefix(data[j:], []byte(`\u`)) {
+	if j == len(data) || data[j] != '\\' || j+1 == len(data) || data[j+1] != 'u' {
 		return 0, false
 	}
 	return hex4(data, j+len(`\u`))

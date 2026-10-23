@@ -63,10 +63,16 @@ func firstLane(m uint64) int {
 	return bits.TrailingZeros64(m) / byteBits
 }
 
-// plainRun returns the index of the first byte at or after data[j] that is
-// not plain, or len(data). After one whole word or more, the word that ends
-// data covers the tail in one step when it is plain.
+// plainRun returns the index of the first byte at or after data[j] that is not plain,
+// or len(data). It tests data[j] alone, so a run that stops at once costs no word, then
+// the words past it; after one or more, the word that ends data covers a plain tail.
 func plainRun(data []byte, j int) int {
+	if j != len(data) {
+		if !plainByte(data[j]) {
+			return j
+		}
+		j++
+	}
 	words := (len(data) - j) / wordSize
 	for range words {
 		if m := plainMask(load64(data, j)); m != 0 {
