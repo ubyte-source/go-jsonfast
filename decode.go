@@ -186,10 +186,14 @@ const (
 // escape, a surrogate pair of two, or a byte, malformedRune when no body holds it and
 // badRune when utf8.DecodeRune rejects it, as for a lone surrogate half.
 func runeAt(data []byte, i int) (r rune, n int) {
+	if c := data[i]; c != '\\' {
+		if bodyByte(c) {
+			return badRune, 1
+		}
+		return malformedRune, 1
+	}
 	hi, ok := unicodeEscape(data, i)
 	switch {
-	case !ok && bodyByte(data[i]):
-		return badRune, 1
 	case !ok:
 		return malformedRune, 1
 	case !utf16.IsSurrogate(hi):
