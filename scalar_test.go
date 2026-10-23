@@ -293,6 +293,12 @@ type misreadNumber struct {
 func misreadNumbers(limit int) []misreadNumber {
 	tiny := func(zeros int, exp string) string { return fmt.Sprintf("0.%s1%s", digits('0', zeros), exp) }
 	const half = "9007199254740993" // 2^53+1, halfway between two float64 values
+	const pastHalf = half + ".0001" // the short form of the long texts just past half
+	// halfPast writes half and a 1 as n digits before the point, scaled down to just
+	// past half: a halfway case past 19 digits, which strconv rounds on its slow path.
+	halfPast := func(n int) string {
+		return half + digits('0', n-len(half)-1) + "1e-" + strconv.Itoa(n-len(half))
+	}
 	// tie is (2^53-5)*2^-1075, halfway between two subnormal float64 values, times
 	// 10^1075: an integer of 768 digits, all of which rounding to even reads.
 	const tieOdd, tieShift = 1<<53 - 5, 1075
@@ -311,10 +317,12 @@ func misreadNumbers(limit int) []misreadNumber {
 		{tenTo(manyDigits) + "e-1024", "1.0"},
 		{digits('9', manyDigits) + "e-1024", "0.99999999999999999999999"},
 		{"2" + digits('0', manyDigits) + "." + digits('0', manyDigits) + "e-492", "2e532"},
+		{halfPast(pointRead), pastHalf},
+		{halfPast(pointRead + 1), pastHalf},
 		{half + digits('0', pastPoint) + "e-900", half},
-		{half + digits('0', pastPoint) + "1e-901", half + ".0001"},
-		{negative(half + digits('0', pastPoint) + "1e-901"), negative(half + ".0001")},
-		{half + digits('0', pastPoint) + ".1e-900", half + ".0001"},
+		{half + digits('0', pastPoint) + "1e-901", pastHalf},
+		{negative(half + digits('0', pastPoint) + "1e-901"), negative(pastHalf)},
+		{half + digits('0', pastPoint) + ".1e-900", pastHalf},
 		{tie.String() + digits('0', pastPoint) + "e-1975", tie.String() + "e-1075"},
 		{tenTo(pastPoint) + "." + digits('0', manyDigits) + "e-890", "1e+10"},
 		{negative(digits('9', pastPoint)) + "e-99999", "-0.0"},
