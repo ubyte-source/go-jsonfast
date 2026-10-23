@@ -71,7 +71,7 @@ func decodeToken(d []byte) ([]byte, strStatus) {
 // tokenAt decodes by rule the string token at data[i] in one pass and returns
 // its value, the index past it and the outcome; a value that needs decoding is carved
 // from a, whose new chunks hold at least the rest of data up to room bytes.
-func tokenAt(a *arena, data []byte, i, room int, rule stringRule) (value []byte, end int, st strStatus) {
+func tokenAt(a *arena, data []byte, i, room int, lowest rune) (value []byte, end int, st strStatus) {
 	if i == len(data) || data[i] != '"' {
 		return nil, 0, strMalformed
 	}
@@ -79,7 +79,7 @@ func tokenAt(a *arena, data []byte, i, room int, rule stringRule) (value []byte,
 	if j < len(data) && data[j] == '"' {
 		return data[i+1 : j : j], j + 1, strView
 	}
-	v, end, st := decodeFrom(a, data, i+1, j, min(len(data)-i, room), rule)
+	v, end, st := decodeFrom(a, data, i+1, j, min(len(data)-i, room), lowest)
 	return a.carve(v), end, st
 }
 
@@ -138,7 +138,7 @@ func (a *arena) rewind(m arenaMark) {
 // decodeFrom decodes by rule the body of a string from data[j], whose clean run
 // ends at data[k], at the end of a's chunk in use, moving to new chunks of floor bytes
 // or more when it needs them, and checks what ends each run before it writes.
-func decodeFrom(a *arena, data []byte, j, k, floor int, rule stringRule) (v []byte, end int, st strStatus) {
+func decodeFrom(a *arena, data []byte, j, k, floor int, lowest rune) (v []byte, end int, st strStatus) {
 	v = a.buf[len(a.buf):]
 	for {
 		switch {
@@ -154,7 +154,7 @@ func decodeFrom(a *arena, data []byte, j, k, floor int, rule stringRule) (v []by
 			continue
 		}
 		r, n := runeAt(data, k)
-		if !rule.keeps(r) {
+		if r < lowest {
 			return nil, 0, strMalformed
 		}
 		var enc [utf8.UTFMax]byte

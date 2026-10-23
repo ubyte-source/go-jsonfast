@@ -848,3 +848,62 @@ func runInputs(stops string) [][]byte {
 	}
 	return out
 }
+
+// stringWithEscapes is a string token with escapes, which stringEnd and strictEnd
+// check and strictToken decodes.
+const stringWithEscapes = `"line\nbreak caf\u00e9"`
+
+// timeStringEnd times end on stringWithEscapes, which ends at its last byte.
+func timeStringEnd(b *testing.B, end func(data []byte, at int) (int, bool)) {
+	b.Helper()
+	data := []byte(stringWithEscapes)
+	if got, ok := end(data, 0); !ok || got != len(data) {
+		b.Fatalf("the end of %s = %d, %v, want %d, true", data, got, ok, len(data))
+	}
+	b.ReportAllocs()
+	b.SetBytes(int64(len(data)))
+	for b.Loop() {
+		_, _ = end(data, 0)
+	}
+}
+
+// endRule is how the shared form of stringEnd and strictEnd reads a string body:
+// run skips the bytes it keeps as they are, and lowest is the lowest rune it keeps.
+type endRule interface {
+	run(data []byte, j int) int
+	lowest() rune
+}
+
+type anyRule struct{}
+
+func (anyRule) run(data []byte, j int) int { return bodyRun(data, j) }
+
+func (anyRule) lowest() rune { return anyBody }
+
+type utf8Rule struct{}
+
+func (utf8Rule) run(data []byte, j int) int { return cleanRun(data, j) }
+
+func (utf8Rule) lowest() rune { return utf8Body }
+
+// sharedEnd is the one generic form that could replace stringEnd and strictEnd.
+func sharedEnd[R endRule](data []byte, j int) (int, bool) {
+	var rule R
+	for {
+		j = rule.run(data, j)
+		switch {
+		case uint(j) >= uint(len(data)):
+			return 0, false
+		case data[j] == '"':
+			return j + 1, true
+		}
+		if shortEscape(data, j) != 0 {
+			j += shortEscapeLen
+			continue
+		}
+		var ok bool
+		if j, ok = runeEnd(data, j, rule.lowest()); !ok {
+			return 0, false
+		}
+	}
+}

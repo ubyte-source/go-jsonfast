@@ -295,6 +295,18 @@ func BenchmarkSkipStringAt(b *testing.B) {
 	}
 }
 
+func BenchmarkStringEnd(b *testing.B) {
+	timeStringEnd(b, func(data []byte, at int) (int, bool) {
+		return stringEnd(data, at+1)
+	})
+}
+
+func BenchmarkStringEndGenericForm(b *testing.B) {
+	timeStringEnd(b, func(data []byte, at int) (int, bool) {
+		return sharedEnd[anyRule](data, at+1)
+	})
+}
+
 func TestSkipBracedCountsOnlyItsOwnPair(t *testing.T) {
 	longKey := `{"` + strings.Repeat("n", longRun) + `":{"x":[1,2]}}`
 	for _, tc := range []struct {

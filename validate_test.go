@@ -238,33 +238,21 @@ func BenchmarkValidUTF8(b *testing.B) {
 	}
 }
 
-// stringWithEscapes is a string token with escapes, which strictEnd checks and
-// strictToken decodes.
-const stringWithEscapes = `"line\nbreak caf\u00e9"`
-
-// benchmarkStringEnd times end on stringWithEscapes, which ends at its last byte.
-func benchmarkStringEnd(b *testing.B, end func(data []byte, at int) (int, bool)) {
-	b.Helper()
-	data := []byte(stringWithEscapes)
-	if got, ok := end(data, 0); !ok || got != len(data) {
-		b.Fatalf("the end of %s = %d, %v, want %d, true", data, got, ok, len(data))
-	}
-	b.ReportAllocs()
-	b.SetBytes(int64(len(data)))
-	for b.Loop() {
-		_, _ = end(data, 0)
-	}
-}
-
 func BenchmarkStrictEnd(b *testing.B) {
-	benchmarkStringEnd(b, strictEnd)
+	timeStringEnd(b, strictEnd)
 }
 
 func BenchmarkStrictEndSharedForm(b *testing.B) {
-	benchmarkStringEnd(b, func(data []byte, at int) (int, bool) {
+	timeStringEnd(b, func(data []byte, at int) (int, bool) {
 		var a arena
 		_, end, ok := a.strictToken(data, at)
 		return end, ok
+	})
+}
+
+func BenchmarkStrictEndGenericForm(b *testing.B) {
+	timeStringEnd(b, func(data []byte, at int) (int, bool) {
+		return sharedEnd[utf8Rule](data, at+1)
 	})
 }
 

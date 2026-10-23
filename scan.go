@@ -172,62 +172,43 @@ func skipStringAt(data []byte, i int) (int, bool) {
 	return stringEnd(data, i+1)
 }
 
-// stringRule is how a string scan reads a body: which bytes it skips as they
-// are, and which runes it keeps.
-type stringRule bool
-
-// The string rules.
+// The lowest rune of those runeAt returns that each reading of a string body keeps:
+// anyBody keeps every byte a body may hold and every well-formed escape, as json.Valid
+// does, and utf8Body keeps only code points, so no invalid UTF-8 or lone surrogate.
 const (
-	// anyBody keeps every byte a body may hold and every well-formed escape, as
-	// json.Valid does.
-	anyBody stringRule = false
-	// utf8Body keeps valid UTF-8 and every well-formed escape but a lone
-	// surrogate half, so it keeps only code points.
-	utf8Body stringRule = true
+	anyBody       = badRune
+	utf8Body rune = 0
 )
 
-// keeps reports whether the rule accepts r, a rune that runeAt returns.
-func (rule stringRule) keeps(r rune) bool {
-	if rule == utf8Body {
-		return r >= 0
-	}
-	return r != malformedRune
-}
-
-// bodyEnd returns the index past the closing quote of the string body that
-// continues at data[j], read by rule; a short escape stands for an ASCII byte,
-// which both rules keep.
-func bodyEnd(data []byte, j int, rule stringRule) (int, bool) {
+// stringEnd returns the index past the closing quote of the string body that
+// continues at data[j], read by anyBody.
+func stringEnd(data []byte, j int) (int, bool) {
 	for {
-		if rule == utf8Body {
-			j = cleanRun(data, j)
-		} else {
-			j = bodyRun(data, j)
-		}
+		j = bodyRun(data, j)
 		switch {
 		case uint(j) >= uint(len(data)):
 			return 0, false
 		case data[j] == '"':
 			return j + 1, true
-		case data[j] != '\\':
-			return 0, false
 		}
 		if shortEscape(data, j) != 0 {
 			j += shortEscapeLen
 			continue
 		}
-		r, n := runeAt(data, j)
-		if !rule.keeps(r) {
+		var ok bool
+		if j, ok = runeEnd(data, j, anyBody); !ok {
 			return 0, false
 		}
-		j += n
 	}
 }
 
-// stringEnd returns the index past the closing quote of the string body that
-// continues at data[j].
-func stringEnd(data []byte, j int) (int, bool) {
-	return bodyEnd(data, j, anyBody)
+// runeEnd returns the index past the rune runeAt reads at data[j], if the reading that
+// keeps the runes from lowest up keeps it.
+func runeEnd(data []byte, j int, lowest rune) (int, bool) {
+	if r, n := runeAt(data, j); r >= lowest {
+		return j + n, true
+	}
+	return 0, false
 }
 
 // closerOffset is how far each closer sits past its opener, '}' past '{' and ']'

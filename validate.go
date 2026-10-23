@@ -22,9 +22,27 @@ func walkFault(data []byte, i int) error {
 	return nil
 }
 
-// strictEnd returns the index past the string at data[at] read by the ValidUTF8 rule.
+// strictEnd returns the index past the string at data[at] read by the ValidUTF8 rule,
+// utf8Body.
 func strictEnd(data []byte, at int) (int, bool) {
-	return bodyEnd(data, at+1, utf8Body)
+	j := at + 1
+	for {
+		j = cleanRun(data, j)
+		switch {
+		case uint(j) >= uint(len(data)):
+			return 0, false
+		case data[j] == '"':
+			return j + 1, true
+		}
+		if shortEscape(data, j) != 0 {
+			j += shortEscapeLen
+			continue
+		}
+		var ok bool
+		if j, ok = runeEnd(data, j, utf8Body); !ok {
+			return 0, false
+		}
+	}
 }
 
 // WalkStrings calls fn, which must not be nil, with every string of the value in data,
