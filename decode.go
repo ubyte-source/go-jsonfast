@@ -198,9 +198,9 @@ func runeAt(data []byte, i int) (r rune, n int) {
 }
 
 // shortEscape returns the byte that the two-byte escape at data[j] stands for,
-// or 0 when none starts there.
+// or 0 when none starts there: \u takes four hex digits, which unicodeRune reads.
 func shortEscape(data []byte, j int) byte {
-	if data[j] != '\\' || j+1 == len(data) {
+	if data[j] != '\\' || j+1 == len(data) || data[j+1] == 'u' {
 		return 0
 	}
 	return unescapeByte(data[j+1])
@@ -210,7 +210,10 @@ func shortEscape(data []byte, j int) byte {
 // joins into one code point and any other surrogate half decodes to badRune; a
 // malformed escape is malformedRune, one byte long.
 func unicodeRune(data []byte, j int) (r rune, n int) {
-	hi, ok := unicodeEscape(data, j)
+	if j+1 == len(data) || data[j+1] != 'u' {
+		return malformedRune, 1
+	}
+	hi, ok := hex4(data, j+len(`\u`))
 	switch {
 	case !ok:
 		return malformedRune, 1
