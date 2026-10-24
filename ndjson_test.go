@@ -21,9 +21,6 @@ func lengthPrefixed(data []byte) []string {
 	return parts
 }
 
-// newline ends every record of a batch.
-const newline = "\n"
-
 // batchRecords is how many records a batch of the BatchWriter tests holds.
 const batchRecords = 16
 
@@ -37,9 +34,9 @@ func TestBatchWriterZeroValueIsReady(t *testing.T) {
 	var w BatchWriter
 	w.AppendString(objectA1)
 	w.Append([]byte(oneArray))
-	if got := string(w.Bytes()); got != objectA1+newline+oneArray+newline || w.Len() != len(got) || w.Count() != 2 {
+	if got := string(w.Bytes()); got != objectA1+"\n"+oneArray+"\n" || w.Len() != len(got) || w.Count() != 2 {
 		t.Fatalf("zero BatchWriter holds %q, Len %d, with %d records, want %q, %d, 2", got, w.Len(), w.Count(),
-			objectA1+newline+oneArray+newline, len(got))
+			objectA1+"\n"+oneArray+"\n", len(got))
 	}
 }
 
@@ -103,7 +100,7 @@ func TestBatchWriterGrowMakesRoomOnce(t *testing.T) {
 func TestBatchWriterAppendAllocs(t *testing.T) {
 	w := NewBatchWriter(0)
 	line := []byte(batchLine)
-	size := batchRecords * (len(line) + len(newline) + len(emptyObject) + len(newline))
+	size := batchRecords * len(batchLine+"\n"+emptyObject+"\n")
 	assertAllocs(t, 0, func() {
 		w.Reset()
 		w.Grow(size)
@@ -143,7 +140,7 @@ func FuzzBatchWriterAppend(f *testing.F) {
 		var want strings.Builder
 		for _, record := range records {
 			want.WriteString(record)
-			want.WriteString(newline)
+			want.WriteString("\n")
 		}
 		for _, w := range []*BatchWriter{NewBatchWriter(1), AcquireBatchWriter()} {
 			for range 2 {
@@ -163,7 +160,7 @@ func FuzzBatchWriterAppend(f *testing.F) {
 // checkBatch fails tb unless w holds batchRecords copies of batchLine.
 func checkBatch(tb testing.TB, w *BatchWriter) {
 	tb.Helper()
-	batch := strings.Repeat(batchLine+newline, batchRecords)
+	batch := strings.Repeat(batchLine+"\n", batchRecords)
 	if w.Count() != batchRecords || w.Len() != len(batch) || string(w.Bytes()) != batch {
 		tb.Fatalf("the batch holds %d records in %d bytes, %q; want %d of %q", w.Count(), w.Len(), w.Bytes(),
 			batchRecords, batchLine)
@@ -279,7 +276,7 @@ func TestAcquireBatchWriterConcurrently(t *testing.T) {
 				record := strconv.Itoa(g) + ":" + strconv.Itoa(i)
 				w := AcquireBatchWriter()
 				w.AppendString(record)
-				if string(w.Bytes()) != record+newline || w.Count() != 1 {
+				if string(w.Bytes()) != record+"\n" || w.Count() != 1 {
 					t.Errorf("goroutine %d holds %q in %d records, want only %q", g, w.Bytes(), w.Count(), record)
 					return
 				}

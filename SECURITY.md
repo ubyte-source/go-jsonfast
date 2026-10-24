@@ -146,24 +146,22 @@ kept in the pool.
   `make vet` (`lint.yml`).
 - `golangci-lint` v2.14.0, built with Go 1.27.2 (`lint.yml`, `make lint`),
   with the repository `.golangci.yml`: every linter of its enable list and the
-  `gofmt` and `goimports` formatters, `gosec` included, test files linted. Its
-  part shared with go-authware and mcp-server leaves out `run.go` and the
-  rules each repository adds; here the `depguard` rule `unsafe` denies
-  `unsafe` to every production file but `text.go` and `swar_unsafe.go`.
-  govet's `fieldalignment` is off, since struct fields are grouped by meaning.
-  `revive` runs every rule, `add-constant` and `line-length-limit` included,
-  and `unhandled-error` skips the calls errcheck excludes by default.
-  `wrapcheck` lets pass the errors of go-authware's internal packages and
-  those a decorator forwards from its delegate, and `depguard` and
-  `gomodguard_v2` block assertion libraries. Every `nolint` directive names
-  the linter and gives a reason.
+  `gofmt` and `goimports` formatters, `gosec` included, test files linted. The
+  `depguard` rule `unsafe` denies `unsafe` to every production file but
+  `text.go` and `swar_unsafe.go`, and `depguard` and `gomodguard_v2` block
+  assertion libraries. govet runs every analyzer but `fieldalignment`, since
+  fields keep the order of their role and no production struct has padding
+  that a reorder removes. `revive` runs every rule: `add-constant` lets code
+  count with 0, 1 and 2 and leaves the literals of tests alone, and
+  `unhandled-error` skips the prints of the examples and the `WriteByte` and
+  `WriteString` calls of a `strings.Builder`, which never fail. Every `nolint`
+  directive names its linter and gives a reason.
 - `deadcode -test` v0.50.0 (`lint.yml`, `make deadcode`): no function that
   neither a test nor an entry point reaches.
 - Every action is pinned by commit with its version, and every workflow has
   top-level permissions no wider than `contents: read` (CodeQL's in
   `security.yml`), no `pull_request_target` trigger and checkouts without
-  persisted credentials. Every `nolint` directive names the linter and gives
-  a reason.
+  persisted credentials.
 - `govulncheck` v1.8.0 and CodeQL with the `security-and-quality` suite
   (`security.yml`).
 - Native fuzzing (`fuzz.yml`, weekly, and `make fuzz`) over every `Fuzz`

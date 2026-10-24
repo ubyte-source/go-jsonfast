@@ -60,11 +60,8 @@ func FuzzDecodeBool(f *testing.F) {
 
 // negative returns the number text s with a minus sign.
 func negative(s string) string {
-	return minus + s
+	return "-" + s
 }
-
-// minus is the sign of a negative number.
-const minus = "-"
 
 // tenTo returns 10 to the power n in decimal digits.
 func tenTo(n int) string {
@@ -202,10 +199,10 @@ func nearestFloat(s string, bitSize int) (float64, bool) {
 	r, ok := new(big.Rat).SetString(s)
 	if !ok {
 		mantissa, exponent, _ := strings.Cut(strings.ToLower(s), "e")
-		if strings.Trim(mantissa, "-0.") != "" && !strings.HasPrefix(exponent, minus) {
+		if strings.Trim(mantissa, "-0.") != "" && !strings.HasPrefix(exponent, "-") {
 			return 0, false
 		}
-		if strings.HasPrefix(mantissa, minus) {
+		if strings.HasPrefix(mantissa, "-") {
 			return math.Copysign(0, -1), true
 		}
 		return 0, true
@@ -218,7 +215,7 @@ func nearestFloat(s string, bitSize int) (float64, bool) {
 	if math.IsInf(f, 0) {
 		return 0, false
 	}
-	if f == 0 && strings.HasPrefix(s, minus) {
+	if f == 0 && strings.HasPrefix(s, "-") {
 		return math.Copysign(0, -1), true
 	}
 	return f, true

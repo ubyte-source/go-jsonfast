@@ -20,12 +20,6 @@ const (
 	negativeHalf = -0.5
 )
 
-// Keys of the cycle and sharing fixtures.
-const (
-	keyA = "a"
-	keyB = "b"
-)
-
 // nullElement is an array whose one element the value writers write as null.
 const nullElement = "[null]"
 
@@ -140,7 +134,7 @@ func cycles() []cycle {
 	loop := map[string]any{}
 	loop[plainText] = loop
 	inner := []any{nil}
-	outer := map[string]any{keyA: inner}
+	outer := map[string]any{"a": inner}
 	inner[0] = outer
 	ring := map[string]any{}
 	at := ring
@@ -152,7 +146,7 @@ func cycles() []cycle {
 	fork := []any{nil, nil}
 	fork[0], fork[1] = fork, fork
 	twin := map[string]any{}
-	twin[keyA], twin[keyB] = twin, twin
+	twin["a"], twin["b"] = twin, twin
 	deep := map[string]any{}
 	at = deep
 	for range deepCycle - 1 {
@@ -181,7 +175,7 @@ func TestBuilderAddValueElementWritesNullForCycles(t *testing.T) {
 
 func TestBuilderAddValueElementWritesSharedContainersEachTime(t *testing.T) {
 	shared := []any{int64(1)}
-	twice := []any{shared, map[string]any{keyA: shared, keyB: shared}, shared}
+	twice := []any{shared, map[string]any{"a": shared, "b": shared}, shared}
 	deep := any(twice)
 	for range deepCycle {
 		deep = []any{deep}
@@ -452,8 +446,8 @@ func TestCompareWrittenReadsRejectedBytesAsReplacement(t *testing.T) {
 		a, b string
 		want int
 	}{
-		{"a\xff", "a" + replacement, 0}, {"\x80", "\xff", 0}, {"\xff", "\xef\xbf\xbe", -1}, {"", keyA, -1},
-		{keyA, "a\xff", -1}, {"é", "e", 1}, {"a~", "a\x7f", -1}, {plainText, plainText, 0},
+		{"a\xff", "a" + replacement, 0}, {"\x80", "\xff", 0}, {"\xff", "\xef\xbf\xbe", -1}, {"", "a", -1},
+		{"a", "a\xff", -1}, {"é", "e", 1}, {"a~", "a\x7f", -1}, {plainText, plainText, 0},
 		{"\xc3\xa9", "\xc3A", -1}, {"\xe2\x82\xac", "\xe2\x82\xad", -1}, {"x\xff\xfey", "x" + replacement + "\x80y", 0},
 		{"\xe2\x82\xac", "\xe2\x82", -1}, {"\xe2\x82", "\xef\xbf\xbd\xef\xbf\xbd", 0}, {"az", "za", -1},
 	} {

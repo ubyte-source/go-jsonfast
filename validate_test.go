@@ -518,7 +518,19 @@ func limitTables() map[string]string {
 // limitProbes maps the parameter of each row of the limits tables to the tests that
 // pin its value at the bound and one past it.
 func limitProbes() map[string][]string {
-	spill := "TestNameSetResetDropsAMapPastTheNamesItKeeps"
+	probes := map[string][]string{
+		"Builder pool":     {"TestReleaseKeepsBuildersUpToTheLimit"},
+		"BatchWriter pool": {"TestReleaseBatchWriterKeepsWritersUpToTheLimit"},
+		"`EscapeString`":   {"TestEscapeStringAllocs"},
+	}
+	maps.Copy(probes, depthProbes())
+	maps.Copy(probes, nameProbes())
+	return probes
+}
+
+// depthProbes maps the rows that bound nesting, and the stack and memory its levels
+// take, to their probes.
+func depthProbes() map[string][]string {
 	depth := []string{
 		"TestValidUTF8HonorsTheDepthBound", "TestValidUTF8MaxDepthMatchesEncodingJSON",
 		"TestWalkTokensHonorsTheDepthBound", "TestIterateObjectHonorsTheDepthBound",
@@ -532,23 +544,32 @@ func limitProbes() map[string][]string {
 		"TestBuilderAddValueElementAllocs", "TestValueEncoderIndexKeepsTwoToFourBucketsPerFrame",
 		"TestBuilderAddValueElementKeepsTheGoroutineStackFlat",
 	}
-	probes := map[string][]string{
-		"Builder pool":                     {"TestReleaseKeepsBuildersUpToTheLimit"},
-		"BatchWriter pool":                 {"TestReleaseBatchWriterKeepsWritersUpToTheLimit"},
-		"Validator depth":                  slices.Concat(depth, validator),
-		"Validator stack use":              {"TestValidUTF8WalksHugeNestingIteratively"},
-		"Validator memory":                 validator,
-		"`FlattenObject` depth":            {"TestFlattenObjectWritesLeaves", "TestFlattenObjectCompactsArrayLeaves"},
-		"`DecodeValue` open containers":    openValues,
-		"`DecodeValue` stack use":          openValues,
-		"Decoded strings of `DecodeValue`": {"TestValueDecoderTextCopiesByteInputIntoAChunkOfTheRest"},
-		"Value writers open containers":    writers,
-		"Value writers stack use":          writers,
-		"Value writers depth":              {"TestBuilderAddValueElementWritesNullPastMaxDepth"},
-		"`EscapeString`":                   {"TestEscapeStringAllocs"},
-		"`WalkTokens` name sets": {
-			"TestWalkTokensAllocs", "TestWalkTokensReusesTheSetOfAClosedObject", spill,
+	return map[string][]string{
+		"Validator depth":               slices.Concat(depth, validator),
+		"Validator stack use":           {"TestValidUTF8WalksHugeNestingIteratively"},
+		"Validator memory":              validator,
+		"`FlattenObject` depth":         {"TestFlattenObjectWritesLeaves", "TestFlattenObjectCompactsArrayLeaves"},
+		"`DecodeValue` open containers": openValues,
+		"`DecodeValue` stack use":       openValues,
+		"Value writers open containers": writers,
+		"Value writers stack use":       writers,
+		"Value writers depth":           {"TestBuilderAddValueElementWritesNullPastMaxDepth"},
+		"`ValidUTF8`, `WalkStrings`, `WalkTokens`, `IterateObject` and `IterateDocument` depth": depth,
+	}
+}
+
+// nameProbes maps the rows of the name sets and of the decoded names and strings to
+// their probes.
+func nameProbes() map[string][]string {
+	spill := "TestNameSetResetDropsAMapPastTheNamesItKeeps"
+	return map[string][]string{
+		"`IterateMembers`, `IterateObject` and `IterateDocument` name set": {
+			"TestIterateMembersAllocs", "TestIterateObjectAllocs", "TestIterateMembersFollowsTheIterateFieldsContract",
 		},
+		"`IterateDocument` nested name sets": {
+			"TestIterateDocumentAllocs", "TestIterateDocumentAllocatesForTheOpenObjectsOnly", spill,
+		},
+		"`WalkTokens` name sets": {"TestWalkTokensAllocs", "TestWalkTokensReusesTheSetOfAClosedObject", spill},
 		"`FlattenObject` leaf names": {
 			"TestFlattenObjectAllocs", "TestFlattenObjectRefusesAnObjectNamedAsAnEarlierLeaf",
 		},
@@ -556,29 +577,20 @@ func limitProbes() map[string][]string {
 			"TestFlattenObjectAllocs", "TestFlattenObjectSpillsOneMapPerLevel",
 			"TestPushSetTakesOverTheMapOfAClosedSet", "TestFlattenObjectGivesBackTheRoomOfTheObjectsItLeaves", spill,
 		},
-		"`IterateDocument` nested name sets": {
-			"TestIterateDocumentAllocs", "TestIterateDocumentAllocatesForTheOpenObjectsOnly", spill,
-		},
 		"Decoded strings of `IterateStringArray` and `WalkStrings`": {
 			"TestArenaTokenAtSizesTheFirstChunkToTheRestUpToTheRoom",
 			"TestIterateStringArrayDecodesALongDocumentIntoDoublingChunks",
 		},
-		"`IterateMembers`, `IterateObject` and `IterateDocument` name set": {
-			"TestIterateMembersAllocs", "TestIterateObjectAllocs",
-			"TestIterateMembersFollowsTheIterateFieldsContract",
+		"Decoded strings of `DecodeValue`": {"TestValueDecoderTextCopiesByteInputIntoAChunkOfTheRest"},
+		"Decoded names of `IterateMembers`, `IterateObject`, `IterateDocument`, `FlattenObject` and `WalkTokens`": {
+			"TestArenaTokenAtSizesTheFirstChunkToTheRestUpToTheRoom",
+			"TestIterateMembersDecodesLongNamesIntoChunksUpToTheRoom",
+			"TestIterateDocumentDecodesNestedNamesIntoChunksOfTheirOwn",
+			"TestFlattenObjectAllocatesForTheOpenObjectsOnly", "TestWalkTokensKeepsEveryNameIntact",
+			"TestFlattenObjectGivesBackTheRoomOfTheObjectsItLeaves",
+			"TestFlattenObjectSizesTheChunksOfObjectNamesByTheRestOfData",
 		},
 	}
-	probes["`ValidUTF8`, `WalkStrings`, `WalkTokens`, `IterateObject` and `IterateDocument` depth"] = depth
-	probes["Decoded names of `IterateMembers`, `IterateObject`, `IterateDocument`, `FlattenObject` and "+
-		"`WalkTokens`"] = []string{
-		"TestArenaTokenAtSizesTheFirstChunkToTheRestUpToTheRoom",
-		"TestIterateMembersDecodesLongNamesIntoChunksUpToTheRoom",
-		"TestIterateDocumentDecodesNestedNamesIntoChunksOfTheirOwn",
-		"TestFlattenObjectAllocatesForTheOpenObjectsOnly", "TestWalkTokensKeepsEveryNameIntact",
-		"TestFlattenObjectGivesBackTheRoomOfTheObjectsItLeaves",
-		"TestFlattenObjectSizesTheChunksOfObjectNamesByTheRestOfData",
-	}
-	return probes
 }
 
 // limitConstants maps each candidate limit constant to the parameter of its row,
