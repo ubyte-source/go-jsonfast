@@ -439,6 +439,54 @@ func inArrays(inner string, depth int) string {
 	return nest("[", inner, "]", depth)
 }
 
+// Sizes of the documents of tokenKinds.
+const (
+	kindItems       = 128      // the items of each one-kind array
+	kindDigits      = 8        // the digits of a mid-length number
+	kindLongDigits  = 64       // the digits of a long number
+	toolResultBytes = 64 << 10 // the least size of the tool result
+)
+
+// tokenKinds returns a document of each kind of token a walk passes, one nested at
+// MaxDepth, and a tool result of 64 KiB.
+func tokenKinds() []struct{ name, doc string } {
+	items := func(item string) string {
+		return "[" + strings.Repeat(item+",", kindItems-1) + item + "]"
+	}
+	pairs := make([]string, kindItems)
+	for i := range pairs {
+		pairs[i] = `"k` + strconv.Itoa(i) + `":1`
+	}
+	return []struct{ name, doc string }{
+		{"Arrays", arrays(kindItems)},
+		{"Members", fmt.Sprintf("{%s}", strings.Join(pairs, ","))},
+		{"Digits1", items("7")},
+		{"Digits8", items(strings.Repeat("7", kindDigits))},
+		{"Digits64", items(strings.Repeat("7", kindLongDigits))},
+		{"Strings", items(`"hello world text"`)},
+		{"Escapes", items(`"a\"b\\c\nd\u00e9f"`)},
+		{"Literals", items("true,false,null")},
+		{"Spaces", items("{\n    \"a\" :  [ 1 ,  2 ] ,\n    \"b\" :  null\n}")},
+		{"AtLimit", arrays(MaxDepth)},
+		{"ToolResult", toolResult()},
+	}
+}
+
+// toolResult returns a JSON-RPC response of a tool call of at least 64 KiB.
+func toolResult() string {
+	var b strings.Builder
+	b.WriteString(`{"jsonrpc":"2.0","id":42,"result":{"content":[`)
+	for i := 0; b.Len() < toolResultBytes; i++ {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		fmt.Fprintf(&b, `{"type":"text","text":"line %d: host db%d \"ok\"\tlatency\u00e9 %d ms",`+
+			`"meta":{"seq":%d,"ok":true,"err":null,"audience":["user","assistant"]}}`, i, i, i, i)
+	}
+	b.WriteString(`],"isError":false}}`)
+	return b.String()
+}
+
 // aliases reports whether the bytes of s start at within[at] in memory.
 func aliases[T Text](s T, within string, at int) bool {
 	b := bytesOf(s)

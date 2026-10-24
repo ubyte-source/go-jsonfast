@@ -1307,10 +1307,10 @@ func FuzzWalkTokens(f *testing.F) {
 }
 
 func BenchmarkWalkTokens(b *testing.B) {
-	for _, bc := range []struct{ name, doc string }{
+	for _, bc := range append([]struct{ name, doc string }{
 		{"Flat", fixtureObject},
 		{"Nested", valueDocument},
-	} {
+	}, tokenKinds()...) {
 		data := []byte(bc.doc)
 		want, derr := decoderTokens(data)
 		if got, err := tokensOf(data, MaxDepth); err != nil || derr != nil || !slices.Equal(got, want) {

@@ -259,6 +259,22 @@ func BenchmarkValidUTF8(b *testing.B) {
 	}
 }
 
+func BenchmarkValidUTF8Tokens(b *testing.B) {
+	for _, bc := range tokenKinds() {
+		data := []byte(bc.doc)
+		if !ValidUTF8(data, MaxDepth) || !jsonUTF8(data) {
+			b.Fatalf("%s: ValidUTF8 = false, want true as encoding/json reads it", bc.name)
+		}
+		b.Run(bc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			b.SetBytes(int64(len(data)))
+			for b.Loop() {
+				_ = ValidUTF8(data, MaxDepth)
+			}
+		})
+	}
+}
+
 func BenchmarkStrictEnd(b *testing.B) {
 	timeStringEnd(b, strictEnd)
 }

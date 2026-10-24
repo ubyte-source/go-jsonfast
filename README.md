@@ -283,8 +283,12 @@ with `bytes.Trim`, `BuilderAddTimeRFC3339FieldTimeAppendFormat` writes the field
 `StrictEndGenericForm` read the inputs of `StringEnd` and `StrictEnd` through one generic form of
 both. The cases that allocate are the ones that decode or copy by design: strings and names with
 escapes, `EscapeString` with escapes, `Build`, whose copy is the result, `DecodeValue`, whose Go
-values are the result, and `FlattenObject/Deep64`, whose 126 leaf names pass the 32 its leaf name
-set holds inline and whose 63 objects that hold an object take a name set each.
+values are the result, `FlattenObject/Deep64`, whose 126 leaf names pass the 32 its leaf name
+set holds inline and whose 63 objects that hold an object take a name set each,
+`WalkTokens/Members`, whose 128 names pass the 32 a name set holds inline, `WalkTokens/ToolResult`,
+whose four objects open at once pass the two name sets held inline, and the `AtLimit` cases, whose
+10,000 levels pass the 256 the walk holds inline. The `Tokens` cases and the kinds `WalkTokens` adds
+to `Flat` and `Nested` hold one kind of token each, nesting at `MaxDepth`, or a 64 KiB tool result.
 
 | Benchmark | ns/op | MB/s | B/op | allocs/op |
 |-----------|------:|-----:|-----:|----------:|
@@ -371,6 +375,17 @@ set holds inline and whose 63 objects that hold an object take a name set each.
 | `IterateDocument/Nested` | 506 | 184 | 0 | 0 |
 | `WalkTokens/Flat` | 413 | 242 | 0 | 0 |
 | `WalkTokens/Nested` | 565 | 164 | 0 | 0 |
+| `WalkTokens/Arrays` | 5,628 | 45 | 0 | 0 |
+| `WalkTokens/Members` | 19,752 | 53 | 10,104 | 6 |
+| `WalkTokens/Digits1` | 3,669 | 70 | 0 | 0 |
+| `WalkTokens/Digits8` | 3,808 | 303 | 0 | 0 |
+| `WalkTokens/Digits64` | 7,633 | 1,093 | 0 | 0 |
+| `WalkTokens/Strings` | 3,338 | 729 | 0 | 0 |
+| `WalkTokens/Escapes` | 6,986 | 367 | 0 | 0 |
+| `WalkTokens/Literals` | 10,348 | 198 | 0 | 0 |
+| `WalkTokens/Spaces` | 37,818 | 149 | 0 | 0 |
+| `WalkTokens/AtLimit` | 458,948 | 44 | 4,088 | 9 |
+| `WalkTokens/ToolResult` | 271,386 | 242 | 2,688 | 1 |
 | `SkipName` | 35.5 | 619 | 0 | 0 |
 | `SkipNameSharedForm` | 87.0 | 253 | 24 | 1 |
 | `IterateArray` | 117 | 333 | 0 | 0 |
@@ -387,6 +402,17 @@ set holds inline and whose 63 objects that hold an object take a name set each.
 | `BuilderAddTimeRFC3339OffsetField` | 64.9 | 755 | 0 | 0 |
 | `ValidUTF8EncodingJSON` | 509 | 611 | 0 | 0 |
 | `ValidUTF8` | 675 | 461 | 0 | 0 |
+| `ValidUTF8Tokens/Arrays` | 1,342 | 191 | 0 | 0 |
+| `ValidUTF8Tokens/Members` | 3,624 | 288 | 0 | 0 |
+| `ValidUTF8Tokens/Digits1` | 1,764 | 146 | 0 | 0 |
+| `ValidUTF8Tokens/Digits8` | 2,350 | 491 | 0 | 0 |
+| `ValidUTF8Tokens/Digits64` | 6,784 | 1,226 | 0 | 0 |
+| `ValidUTF8Tokens/Strings` | 2,086 | 1,166 | 0 | 0 |
+| `ValidUTF8Tokens/Escapes` | 5,680 | 451 | 0 | 0 |
+| `ValidUTF8Tokens/Literals` | 3,466 | 591 | 0 | 0 |
+| `ValidUTF8Tokens/Spaces` | 13,498 | 417 | 0 | 0 |
+| `ValidUTF8Tokens/AtLimit` | 106,768 | 187 | 4,088 | 9 |
+| `ValidUTF8Tokens/ToolResult` | 117,354 | 560 | 0 | 0 |
 | `StringEnd` | 20.5 | 1,124 | 0 | 0 |
 | `StringEndGenericForm` | 25.2 | 914 | 0 | 0 |
 | `StrictEnd` | 28.3 | 814 | 0 | 0 |
