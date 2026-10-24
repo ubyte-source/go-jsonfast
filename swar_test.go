@@ -6,6 +6,7 @@ import (
 	"math"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // isPlainSpec states the plain bytes by their range.
@@ -115,11 +116,43 @@ func TestBorrowLanesFlagsExactlyTheWordsWithAZeroByte(t *testing.T) {
 func TestPlainRunAndBodyRunStopAtTheFirstByteTheyReject(t *testing.T) {
 	for _, data := range runInputs("\x00\x1f\"\\\x80\xff") {
 		for start := 0; start <= len(data); start++ {
-			if got, want := plainRun(data, start), firstMatch(data, start, isPlainSpec); got != want {
+			plainBefore := start == 0 || isPlainSpec(data[start-1])
+			if got, want := plainRun(data, start), firstMatch(data, start, isPlainSpec); plainBefore && got != want {
 				t.Fatalf("plainRun(%q, %d) = %d, want %d", data, start, got, want)
 			}
 			if got, want := bodyRun(data, start), firstMatch(data, start, isBodySpec); got != want {
 				t.Fatalf("bodyRun(%q, %d) = %d, want %d", data, start, got, want)
+			}
+		}
+	}
+}
+
+// cleanSpec states where cleanRun stops: past plain bytes and whole multi-byte
+// runes, at the first other byte.
+func cleanSpec(data []byte, j int) int {
+	for j < len(data) {
+		_, size := utf8.DecodeRune(data[j:])
+		if !isPlainSpec(data[j]) && size == 1 {
+			return j
+		}
+		j += size
+	}
+	return j
+}
+
+func TestCleanRunStopsAtTheFirstByteThatNeedsDecoding(t *testing.T) {
+	inputs := runInputs("\x00\x1f\"\\\x80\xff")
+	for _, r := range []string{"é", "日", "😀", "é\xff", "日\"", "😀\\"} {
+		for _, data := range runInputs("") {
+			for pos := range len(data) + 1 {
+				inputs = append(inputs, []byte(string(data[:pos])+r+string(data[pos:])))
+			}
+		}
+	}
+	for _, data := range inputs {
+		for start := 0; start <= len(data); start++ {
+			if got, want := cleanRun(data, start), cleanSpec(data, start); got != want {
+				t.Fatalf("cleanRun(%q, %d) = %d, want %d", data, start, got, want)
 			}
 		}
 	}

@@ -207,6 +207,8 @@ func BenchmarkEscapeString(b *testing.B) {
 	for _, bc := range []struct{ name, s string }{
 		{"Plain", "This is a typical syslog message with no special characters at all"},
 		{"Escapes", "Message with \"quotes\" and \\backslash and\nnewline"},
+		{"EscapeRun", strings.Repeat("\n\"", escapeRunPairs)},
+		{"Unicode", strings.Repeat("日本語テスト café ", unicodeRepeats)},
 	} {
 		b.Run(bc.name, func(b *testing.B) {
 			if got, want := EscapeString(bc.s), jsonEscaped(b, bc.s); got != want {

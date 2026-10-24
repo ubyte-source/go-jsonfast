@@ -298,14 +298,17 @@ set holds inline and whose 63 objects that hold an object take a name set each.
 | `DecodeStringView/Escaped` | 97.1 | 680 | 80 | 1 |
 | `DecodeStringView/Unicode` | 413 | 494 | 208 | 1 |
 | `DecodeStringView/UnicodeEscapes` | 1,044 | 362 | 384 | 1 |
+| `DecodeStringView/EscapeRun` | 390 | 210 | 96 | 1 |
 | `DecodeString/Clean` | 21.2 | 2,829 | 0 | 0 |
 | `DecodeString/Escaped` | 105 | 626 | 80 | 1 |
 | `DecodeString/Unicode` | 441 | 463 | 208 | 1 |
 | `DecodeString/UnicodeEscapes` | 1,147 | 330 | 384 | 1 |
+| `DecodeString/EscapeRun` | 409 | 201 | 96 | 1 |
 | `EqualString/Clean` | 25.2 | 2,380 | 0 | 0 |
 | `EqualString/Escaped` | 67.1 | 983 | 0 | 0 |
 | `EqualString/Unicode` | 348 | 586 | 0 | 0 |
 | `EqualString/UnicodeEscapes` | 1,010 | 374 | 0 | 0 |
+| `EqualString/EscapeRun` | 291 | 282 | 0 | 0 |
 | `DecodeBool` | 1.75 |  | 0 | 0 |
 | `DecodeInt64` | 26.6 |  | 0 | 0 |
 | `DecodeInt64Strconv` | 29.9 |  | 0 | 0 |
@@ -328,6 +331,8 @@ set holds inline and whose 63 objects that hold an object take a name set each.
 | `BuilderAppendEscapedString/Long` | 1,048 | 3,055 | 0 | 0 |
 | `EscapeString/Plain` | 17.1 | 3,864 | 0 | 0 |
 | `EscapeString/Escapes` | 80.3 | 598 | 64 | 1 |
+| `EscapeString/EscapeRun` | 188 | 213 | 80 | 1 |
+| `EscapeString/Unicode` | 290 | 691 | 0 | 0 |
 | `FieldKeySyslogObject` | 141 | 1,657 | 0 | 0 |
 | `FieldKeyFields` | 653 | 395 | 0 | 0 |
 | `FlattenObject/Record` | 656 | 177 | 0 | 0 |

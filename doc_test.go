@@ -55,6 +55,14 @@ const (
 	roundTrips = 1000
 )
 
+// unicodeRepeats is how many times the Unicode string benchmarks repeat their
+// phrase.
+const unicodeRepeats = 8
+
+// escapeRunPairs is how many pairs of short escapes the EscapeRun benchmarks hold
+// back to back.
+const escapeRunPairs = 20
+
 // longRun is the length of a run that spans many SWAR words.
 const longRun = 256
 

@@ -226,18 +226,16 @@ func FuzzDecodeString(f *testing.F) {
 	})
 }
 
-// unicodeRepeats is how many times the Unicode and UnicodeEscapes benchmarks repeat
-// their phrase.
-const unicodeRepeats = 8
-
 // stringBenchmarks returns the tokens the string benchmarks decode; UnicodeEscapes
-// holds the phrase of Unicode as an encoder with ASCII-only output writes it.
+// holds the phrase of Unicode as an encoder with ASCII-only output writes it, and
+// EscapeRun short escapes back to back.
 func stringBenchmarks() []struct{ name, raw string } {
 	return []struct{ name, raw string }{
 		{"Clean", `"The quick brown fox jumps over the lazy dog near the river"`},
 		{"Escaped", `"The quick brown fox\njumps over the \"lazy\" dog near the \u00e9"`},
 		{"Unicode", quoted(`\n` + strings.Repeat("日本語テスト café ", unicodeRepeats))},
 		{"UnicodeEscapes", quoted(strings.Repeat(`\u65e5\u672c\u8a9e\u30c6\u30b9\u30c8 caf\u00e9 `, unicodeRepeats))},
+		{"EscapeRun", quoted(strings.Repeat(`\n\"`, escapeRunPairs))},
 	}
 }
 

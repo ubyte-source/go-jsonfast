@@ -58,18 +58,14 @@ func firstLane(m uint64) int {
 }
 
 // plainRun returns the index of the first byte at or after data[j] that is not plain,
-// or len(data): data[j] alone, then a word at a time to the last word of data; a tail
-// under a word is that word shifted right past the bytes before it, zeros stopping it.
+// or len(data), where data[j-1], if any, is plain: a word at a time up to the last word
+// of data, which a tail under 7 bytes reads shifted right past the bytes before j.
 func plainRun(data []byte, j int) int {
-	if j == len(data) || !plainByte(data[j]) {
-		return j
-	}
-	j++
 	last := len(data) - wordSize
 	switch {
 	case last < 0:
 		return plainBytes(data, j)
-	case j > last:
+	case j > last+1:
 		return j + firstLane(plainMask(load64(data[last:], 0)>>(byteBits*(j-last))))
 	}
 	for ; j < last; j += wordSize {
@@ -111,12 +107,14 @@ func bodyBytes(data []byte, j int) int {
 }
 
 // cleanRun returns the index of the first byte at or after data[j] that ends a
-// string body or needs decoding: past plainRun, only valid multi-byte UTF-8 is
-// clean, and it alone decodes to more than one byte.
+// string body or needs decoding: past a plain run, whose first byte it tests inline,
+// only valid multi-byte UTF-8 is clean, and it alone decodes to more than one byte.
 func cleanRun(data []byte, j int) int {
 	for {
-		j = plainRun(data, j)
-		if j == len(data) || !bodyByte(data[j]) {
+		if j < len(data) && plainByte(data[j]) {
+			j = plainRun(data, j+1)
+		}
+		if j == len(data) || data[j] < utf8.RuneSelf {
 			return j
 		}
 		_, size := utf8.DecodeRune(data[j:])

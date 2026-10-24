@@ -6,7 +6,7 @@ import "unicode/utf8"
 // short escapes for '"', '\\', \b, \f, \n, \r and \t, \u00XX for the other
 // control bytes, and U+FFFD for each byte utf8.DecodeRune rejects.
 func (b *Builder) AppendEscaped(p []byte) {
-	b.buf = appendEscaped(b.buf, p, plainRun(p, 0))
+	b.buf = appendEscaped(b.buf, p)
 }
 
 // AppendEscapedString appends s with JSON escaping and no surrounding quotes: the
@@ -30,26 +30,30 @@ func EscapeString(s string) string {
 		return s
 	}
 	var stack [escapeStackSize]byte
-	return string(appendEscaped(stack[:0], p, i))
+	return string(appendEscaped(append(stack[:0], p[:i]...), p[i:]))
 }
 
-// appendEscaped appends p to dst with JSON escaping; the first i bytes of p
-// need none. Past a plain run, a byte that no string body holds as it is takes
-// an escape, and any other starts UTF-8.
-func appendEscaped(dst, p []byte, i int) []byte {
-	dst = append(dst, p[:i]...)
-	for i < len(p) {
+// appendEscaped appends p to dst with JSON escaping: each plain run as it is, its first
+// byte tested inline, and the byte that stops it as an escape when no string body holds
+// it as it is, or else as the start of UTF-8.
+func appendEscaped(dst, p []byte) []byte {
+	i := 0
+	for {
+		if i < len(p) && plainByte(p[i]) {
+			j := plainRun(p, i+1)
+			dst = append(dst, p[i:j]...)
+			i = j
+		}
+		if i == len(p) {
+			return dst
+		}
 		if c := p[i]; !bodyByte(c) {
 			dst = appendEscapedASCII(dst, c)
 			i++
 		} else {
 			dst, i = appendUTF8(dst, p, i)
 		}
-		j := plainRun(p, i)
-		dst = append(dst, p[i:j]...)
-		i = j
 	}
-	return dst
 }
 
 // appendUTF8 appends U+FFFD for a byte at p[i] that utf8.DecodeRune rejects, or
