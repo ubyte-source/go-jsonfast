@@ -133,6 +133,27 @@ func TestValidUTF8TracksKindsPastTheInlineStack(t *testing.T) {
 	}
 }
 
+func TestSlotAtGivesEachStructuralByteASlotOfItsOwn(t *testing.T) {
+	const structural = `",:[]{}`
+	owner := map[uint]byte{}
+	for c := range math.MaxUint8 + 1 {
+		k := slotAt([]byte{byte(c)}, 0)
+		if strings.IndexByte(structural, byte(c)) < 0 {
+			if k != slotScalar {
+				t.Errorf("slotAt(%q) = %d, want the scalar slot %d", c, k, slotScalar)
+			}
+			continue
+		}
+		if prev, taken := owner[k]; taken || k == slotScalar || k == slotEnd {
+			t.Errorf("slotAt(%q) = %d, want a slot of its own (held by %q)", c, k, prev)
+		}
+		owner[k] = byte(c)
+	}
+	if k := slotAt([]byte(structural), len(structural)); k != slotEnd {
+		t.Errorf("slotAt past the end = %d, want the end slot %d", k, slotEnd)
+	}
+}
+
 func TestKindStackSpillsOnlyTheLevelsPastItsInlineWords(t *testing.T) {
 	for _, tc := range []struct{ levels, words int }{
 		{inlineLevels + 1, 1}, {inlineLevels + kindWordBits, 1}, {inlineLevels + kindWordBits + 1, 2},

@@ -78,27 +78,87 @@ func walkBytes(d []byte, maxDepth int, fn func(s []byte) error) error {
 	}
 }
 
-// walkState is what the grammar allows at the walker's position.
+// walkState is what the grammar allows at the walker's position. A value's state
+// tells what follows the value: the end of the text, or the next item.
 type walkState uint8
 
 const (
-	walkValue      walkState = iota // a value
-	walkValueOrEnd                  // a value or ']', right after '['
-	walkName                        // a member name, after ',' in an object
-	walkNameOrEnd                   // a member name or '}', right after '{'
-	walkColon                       // ':', after a member name
-	walkAfter                       // ',' or the closer, after a nested value
-	walkDone                        // nothing more, after the top value
+	walkValue       walkState = iota // the top value
+	walkArrayFirst                   // a value or ']', right after '['
+	walkArrayValue                   // a value, after ',' in an array
+	walkArrayAfter                   // ',' or ']', after a value in an array
+	walkObjectFirst                  // a member name or '}', right after '{'
+	walkName                         // a member name, after ',' in an object
+	walkColon                        // ':', after a member name
+	walkMemberValue                  // a member's value, after ':'
+	walkObjectAfter                  // ',' or '}', after a member's value
+	walkDone                         // nothing more, after the top value
+)
+
+// The slot of a token is its first byte folded into four bits, unique among the
+// structural bytes; any other byte starts a scalar, whose slot no structural byte has.
+const (
+	slotMask       = 0xf
+	slotScalar     = 0
+	slotQuote      = ('"' ^ '"'>>5) & slotMask
+	slotOpenObject = ('{' ^ '{'>>5) & slotMask
+	slotColon      = (':' ^ ':'>>5) & slotMask
+	slotComma      = (',' ^ ','>>5) & slotMask
+	slotEnd        = 12 // the end of data, which every state refuses
+	slotBits       = 4
+)
+
+// slotBytes holds each structural byte at its slot, and a quote, whose slot is
+// slotQuote, at every other slot.
+const slotBytes = `""""""""{[":",}]`
+
+// A walkTable entry holds the state a token leads to and, in its high bits, the work
+// the token takes first, where 0xf0 refuses the token; a closer's state is the one of
+// the container around it.
+const (
+	stateMask  = 0x0f
+	takeScalar = 0x10 // skip the scalar
+	takeOpen   = 0x20 // enter a container
+	takeClose  = 0x30 // leave a container
+)
+
+// walkTable holds the entry of each state and token slot at state<<slotBits|slot.
+const walkTable = "" +
+	"\x19\xf0\xf0\x09\xf0\xf0\xf0\xf0\x24\x21\xf0\xf0\xf0\xf0\xf0\xf0" + // walkValue
+	"\x13\xf0\xf0\x03\xf0\xf0\xf0\xf0\x24\x21\xf0\xf0\xf0\xf0\xf0\x30" + // walkArrayFirst
+	"\x13\xf0\xf0\x03\xf0\xf0\xf0\xf0\x24\x21\xf0\xf0\xf0\xf0\xf0\xf0" + // walkArrayValue
+	"\xf0\xf0\xf0\xf0\xf0\xf0\xf0\xf0\xf0\xf0\xf0\xf0\xf0\x02\xf0\x30" + // walkArrayAfter
+	"\xf0\xf0\xf0\x06\xf0\xf0\xf0\xf0\xf0\xf0\xf0\xf0\xf0\xf0\x30\xf0" + // walkObjectFirst
+	"\xf0\xf0\xf0\x06\xf0\xf0\xf0\xf0\xf0\xf0\xf0\xf0\xf0\xf0\xf0\xf0" + // walkName
+	"\xf0\xf0\xf0\xf0\xf0\xf0\xf0\xf0\xf0\xf0\xf0\x07\xf0\xf0\xf0\xf0" + // walkColon
+	"\x18\xf0\xf0\x08\xf0\xf0\xf0\xf0\x24\x21\xf0\xf0\xf0\xf0\xf0\xf0" + // walkMemberValue
+	"\xf0\xf0\xf0\xf0\xf0\xf0\xf0\xf0\xf0\xf0\xf0\xf0\xf0\x05\x30\xf0" // walkObjectAfter
+
+// slotAt returns the slot of the token at data[i], or slotEnd at the end of data.
+func slotAt(data []byte, i int) uint {
+	if uint(i) >= uint(len(data)) {
+		return slotEnd
+	}
+	c := data[i]
+	if k := uint(c^c>>5) & slotMask; slotBytes[k] == c {
+		return k
+	}
+	return slotScalar
+}
+
+// Slots at which the walker stops: each string, which its caller scans, or every
+// token but a colon and a comma.
+const (
+	stopString uint16 = 1 << slotQuote
+	stopToken         = ^uint16(1<<slotColon | 1<<slotComma)
 )
 
 // endOfValue is the index next returns once the top value ends.
 const endOfValue = -1
 
-// Kinds of an open container, one bit each in a kindStack.
-const (
-	openArray  uint64 = 0
-	openObject uint64 = 1
-)
+// openObject is the kind of an open object in a kindStack, which holds the kind of a
+// container as the low bit of its opener's slot.
+const openObject uint64 = slotOpenObject & 1
 
 // Layout of a kindStack.
 const (
@@ -117,28 +177,43 @@ type kindStack struct {
 // set records kind at depth, which is at least 0 and at most one level past the
 // deepest one set.
 func (s *kindStack) set(depth int, kind uint64) {
-	word, bit := s.word(depth)
-	*word = *word&^(1<<bit) | kind<<bit
+	k, bit := uint(depth)/kindWordBits, uint(depth)%kindWordBits
+	words := s.shallow[:]
+	if k >= inlineKindWords {
+		k -= inlineKindWords
+		words = s.spill(k)
+	}
+	words[k] = words[k]&^(1<<bit) | kind<<bit
+}
+
+// spill returns the spill, grown to hold word k, which is at most one past its end.
+func (s *kindStack) spill(k uint) []uint64 {
+	if k == uint(len(s.deep)) {
+		s.deep = append(s.deep, 0)
+	}
+	return s.deep
 }
 
 // get returns the kind set at depth, which is at least 0 and at most the deepest
 // one set.
 func (s *kindStack) get(depth int) uint64 {
-	word, bit := s.word(depth)
-	return *word >> bit & 1
+	k, bit := uint(depth)/kindWordBits, uint(depth)%kindWordBits
+	if k < inlineKindWords {
+		return s.shallow[k] >> bit & 1
+	}
+	return s.deep[k-inlineKindWords] >> bit & 1
 }
 
-// word returns the word that holds the bit of depth and the bit's position; depth
-// is at least 0 and at most one level past the deepest one set.
-func (s *kindStack) word(depth int) (w *uint64, bit int) {
-	k, bit := depth/kindWordBits, depth%kindWordBits
-	if k < len(s.shallow) {
-		return &s.shallow[k], bit
+// closed returns the state past the container that closes at depth: the end of
+// the text at the top, and else the next item of the container around it.
+func (s *kindStack) closed(depth int) walkState {
+	switch {
+	case depth == 0:
+		return walkDone
+	case s.get(depth-1) == openObject:
+		return walkObjectAfter
 	}
-	if k -= len(s.shallow); k == len(s.deep) {
-		s.deep = append(s.deep, 0)
-	}
-	return &s.deep[k], bit
+	return walkArrayAfter
 }
 
 // walker checks the grammar of a JSON value iteratively, one value per walk, and
@@ -180,11 +255,7 @@ func (w *walker) valueEnd(i int) (int, bool) {
 // endOfValue once the top value ends at w.i; ok is false on malformed or too deep
 // input.
 func (w *walker) next() (at int, ok bool) {
-	for {
-		if at, ok = w.token(); !ok || at == endOfValue || w.data[at] == '"' {
-			return at, ok
-		}
-	}
+	return w.advance(stopString)
 }
 
 // finish walks the rest of the value by the ValidUTF8 rule and returns the index
@@ -239,146 +310,43 @@ func (w *walker) restMembers() error {
 // whose string the caller scans and then resumes the walk past, an opener, a closer
 // or a scalar ending at w.i; past the top value, endOfValue; ok is false on a fault.
 func (w *walker) token() (at int, ok bool) {
-	for w.state != walkDone {
-		i := skipWS(w.data, w.i)
-		if i == len(w.data) {
-			return 0, false
+	return w.advance(stopToken)
+}
+
+// advance moves past each token up to and including the next one whose slot is in
+// stops, and returns the index of its first byte, as token does.
+func (w *walker) advance(stops uint16) (at int, ok bool) {
+	data, i, depth, state := w.data, w.i, w.depth, w.state
+	for state != walkDone {
+		at = skipWS(data, i)
+		i = at + 1
+		k := slotAt(data, at)
+		entry := walkTable[uint(state)<<slotBits|k]
+		state = walkState(entry & stateMask)
+		if take := entry &^ stateMask; take != 0 {
+			switch take {
+			case takeScalar:
+				if i, ok = skipScalar(data, at); !ok {
+					return 0, false
+				}
+			case takeOpen:
+				if depth >= w.maxDepth {
+					return 0, false
+				}
+				w.kinds.set(depth, uint64(k&1))
+				depth++
+			case takeClose:
+				depth--
+				state = w.kinds.closed(depth)
+			default:
+				return 0, false
+			}
 		}
-		w.i = i + 1
-		switch c := w.data[i]; {
-		case c == '"':
-			ok = w.quote()
-		case c == ':' && w.state == walkColon:
-			w.state = walkValue
-			continue
-		case c == ',' && w.state == walkAfter:
-			w.state = w.afterComma()
-			continue
-		default:
-			ok = w.step()
+		if stops>>k&1 == 1 {
+			w.i, w.depth, w.state = i, depth, state
+			return at, true
 		}
-		if !ok {
-			return 0, false
-		}
-		return i, true
 	}
+	w.i, w.depth, w.state = i, depth, state
 	return endOfValue, true
-}
-
-// afterComma returns what the grammar allows after a comma: a member name in an
-// object, and a value in an array.
-func (w *walker) afterComma() walkState {
-	if w.inObject() {
-		return walkName
-	}
-	return walkValue
-}
-
-// quote takes a quote, which opens a value or a member name.
-func (w *walker) quote() bool {
-	switch w.state {
-	case walkValue, walkValueOrEnd:
-		w.valueEnded()
-	case walkName, walkNameOrEnd:
-		w.state = walkColon
-	default:
-		return false
-	}
-	return true
-}
-
-// step takes the byte before w.i, which is not a quote, and reports whether the
-// grammar allows it there.
-func (w *walker) step() bool {
-	switch w.state {
-	case walkAfter:
-		return w.after()
-	case walkValue, walkValueOrEnd:
-		return w.value()
-	case walkNameOrEnd:
-		return w.closeEmpty()
-	default:
-		return false
-	}
-}
-
-// value takes the byte before w.i, where a value may start, other than a quote.
-func (w *walker) value() bool {
-	i := w.i - 1
-	switch w.data[i] {
-	case '{', '[':
-		return w.open()
-	case ']':
-		return w.closeEmpty()
-	}
-	end, ok := skipScalar(w.data, i)
-	w.i = end
-	w.valueEnded()
-	return ok
-}
-
-// after takes the byte before w.i that follows a nested value, other than a
-// comma, which only the closer of the innermost container may be.
-func (w *walker) after() bool {
-	closer := byte(']')
-	if w.inObject() {
-		closer = '}'
-	}
-	if w.data[w.i-1] != closer {
-		return false
-	}
-	w.close()
-	return true
-}
-
-// open enters the container whose opener is the byte before w.i, unless that
-// passes maxDepth.
-func (w *walker) open() bool {
-	if w.depth >= w.maxDepth {
-		return false
-	}
-	kind, next := openArray, walkValueOrEnd
-	if w.data[w.i-1] == '{' {
-		kind, next = openObject, walkNameOrEnd
-	}
-	w.kinds.set(w.depth, kind)
-	w.depth++
-	w.state = next
-	return true
-}
-
-// closeEmpty closes the container just opened, if the byte before w.i is its
-// closer: the state is still the one the opener of that closer set.
-func (w *walker) closeEmpty() bool {
-	opened := walkValueOrEnd
-	if w.data[w.i-1] == '}' {
-		opened = walkNameOrEnd
-	}
-	if w.state != opened {
-		return false
-	}
-	w.close()
-	return true
-}
-
-// close leaves the innermost container, which ends a value.
-func (w *walker) close() {
-	w.depth--
-	w.valueEnded()
-}
-
-// inObject reports whether the innermost open container, which must exist, is an
-// object.
-func (w *walker) inObject() bool {
-	return w.kinds.get(w.depth-1) == openObject
-}
-
-// valueEnded moves past a value: to a separator or a closer inside a
-// container, and to the end of the text at the top.
-func (w *walker) valueEnded() {
-	if w.depth == 0 {
-		w.state = walkDone
-		return
-	}
-	w.state = walkAfter
 }
