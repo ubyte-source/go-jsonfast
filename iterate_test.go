@@ -813,7 +813,7 @@ func BenchmarkIterateObject(b *testing.B) {
 }
 
 // escapedMember is a member whose name holds escapes, which skipName checks and
-// strictName decodes.
+// memberName decodes.
 const escapedMember = `"caf\u00e9 cr\u00e8me":1`
 
 // benchmarkName times name on escapedMember, whose name token ends at its colon.
@@ -838,7 +838,7 @@ func BenchmarkSkipName(b *testing.B) {
 func BenchmarkSkipNameSharedForm(b *testing.B) {
 	benchmarkName(b, func(data []byte, i int) (member, bool) {
 		var a arena
-		_, m, ok := a.strictName(data, i)
+		_, m, ok := a.memberName(data, i, utf8Body)
 		return m, ok
 	})
 }

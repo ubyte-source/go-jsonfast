@@ -279,7 +279,7 @@ with `bytes.Trim`, `BuilderAddTimeRFC3339FieldTimeAppendFormat` writes the field
 `BuilderAddTimeRFC3339Field` with `time.Time.AppendFormat`, `PlainRunSharedForm` and
 `BodyRunSharedForm` run the inputs of `PlainRun` and `BodyRun` through one generic form of both,
 `SkipNameSharedForm` and `StrictEndSharedForm` read the inputs of `SkipName` and `StrictEnd` with
-`strictName` and `strictToken`, which also decode them, and `StringEndGenericForm` and
+`memberName` and `strictToken`, which also decode them, and `StringEndGenericForm` and
 `StrictEndGenericForm` read the inputs of `StringEnd` and `StrictEnd` through one generic form of
 both. The cases that allocate are the ones that decode or copy by design: strings and names with
 escapes, `EscapeString` with escapes, `Build`, whose copy is the result, `DecodeValue`, whose Go

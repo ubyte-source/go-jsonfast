@@ -36,15 +36,14 @@ func IterateMembers[T Text](data T, fn func(name, value T) error) error {
 	)
 	i, step := openContainer(d, '{')
 	for step == stepItem {
-		name, end, st := tokenAt(&a, d, i, arenaRoom, anyBody)
-		if st == strMalformed {
-			return ErrMalformed
+		name, m, ok := a.memberName(d, i, anyBody)
+		if ok {
+			m.valueEnd, ok = skipValueAt(d, m.valueStart)
 		}
-		m, ok := memberValue(d, end)
-		if !ok {
+		switch {
+		case !ok:
 			return ErrMalformed
-		}
-		if !names.add(textOf[string](name)) {
+		case !names.add(textOf[string](name)):
 			return ErrDuplicateName
 		}
 		if err := fn(textOf[T](name), view[T](d, m.valueStart, m.valueEnd)); err != nil {
@@ -97,7 +96,7 @@ func walkObject[T Text](data T, maxDepth int, sets []nameSet, marks []arenaMark,
 	values := newWalker(d, maxDepth-1)
 	i, step := openContainer(d, '{')
 	for step == stepItem {
-		name, m, ok := o.arena.strictName(d, i)
+		name, m, ok := o.arena.memberName(d, i, utf8Body)
 		if ok {
 			m.valueEnd, open, ok = o.valueEnd(values, m.valueStart, open)
 		}
@@ -392,12 +391,12 @@ func colonAfter(data []byte, nameEnd int) (m member, ok bool) {
 	return member{nameEnd: nameEnd, valueStart: skipWS(data, j+1)}, true
 }
 
-// strictName decodes the member name whose token starts at data[i] by the
-// ValidUTF8 rule and finds its colon; the member holds the end of the token and
-// the start of the value.
-func (a *arena) strictName(data []byte, i int) ([]byte, member, bool) {
-	if name, end, ok := a.strictToken(data, i); ok {
-		if m, found := colonAfter(data, end); found {
+// memberName decodes by the rule lowest the member name whose token starts at data[i]
+// and finds its colon; the member holds the end of the token and the value's start.
+func (a *arena) memberName(data []byte, i int, lowest rune) ([]byte, member, bool) {
+	name, end, st := tokenAt(a, data, i, arenaRoom, lowest)
+	if st != strMalformed {
+		if m, ok := colonAfter(data, end); ok {
 			return name, m, true
 		}
 	}
