@@ -11,7 +11,7 @@ type member struct {
 // that is not one object is ErrMalformed, maybe after fn saw the earlier members.
 func IterateFields[T Text](data T, fn func(key, value T) error) error {
 	d := bytesOf(data)
-	i, step := openContainer(d, '{')
+	i, step := openContainer(d, 0, '{')
 	for step == stepItem {
 		m, ok := memberAt(d, i)
 		if !ok {
@@ -22,7 +22,7 @@ func IterateFields[T Text](data T, fn func(key, value T) error) error {
 		}
 		i, step = nextItem(d, m.valueEnd, '}')
 	}
-	return step.err()
+	return step.closeErr(d, i)
 }
 
 // IterateMembers is IterateFields with each name decoded, or a view of data with no
@@ -34,7 +34,7 @@ func IterateMembers[T Text](data T, fn func(name, value T) error) error {
 		a     arena
 		names nameSet
 	)
-	i, step := openContainer(d, '{')
+	i, step := openContainer(d, 0, '{')
 	for step == stepItem {
 		name, m, ok := a.memberName(d, i, anyBody)
 		if ok {
@@ -51,7 +51,7 @@ func IterateMembers[T Text](data T, fn func(name, value T) error) error {
 		}
 		i, step = nextItem(d, m.valueEnd, '}')
 	}
-	return step.err()
+	return step.closeErr(d, i)
 }
 
 // IterateObject is IterateMembers in one pass that accepts only an object
@@ -94,7 +94,7 @@ func walkObject[T Text](data T, maxDepth int, sets []nameSet, marks []arenaMark,
 	)
 	open := openObjects{sets: sets, marks: marks}
 	values := newWalker(d, maxDepth-1)
-	i, step := openContainer(d, '{')
+	i, step := openContainer(d, 0, '{')
 	for step == stepItem {
 		name, m, ok := o.arena.memberName(d, i, utf8Body)
 		if ok {
@@ -111,7 +111,7 @@ func walkObject[T Text](data T, maxDepth int, sets []nameSet, marks []arenaMark,
 		}
 		i, step = nextItem(d, m.valueEnd, '}')
 	}
-	return step.err()
+	return step.closeErr(d, i)
 }
 
 // valueEnd returns the index past the value at or after data[i], which w walks anew by
@@ -210,7 +210,7 @@ func WalkTokens[T Text](data T, maxDepth int, fn func(name, token T) error) erro
 // saw the elements before the fault.
 func IterateArray[T Text](data T, fn func(elem T) error) error {
 	d := bytesOf(data)
-	i, step := openContainer(d, '[')
+	i, step := openContainer(d, 0, '[')
 	for step == stepItem {
 		end, ok := skipValueAt(d, i)
 		if !ok {
@@ -221,7 +221,7 @@ func IterateArray[T Text](data T, fn func(elem T) error) error {
 		}
 		i, step = nextItem(d, end, ']')
 	}
-	return step.err()
+	return step.closeErr(d, i)
 }
 
 // IterateStringArray calls fn, which must not be nil, with each string of the array in
@@ -230,7 +230,7 @@ func IterateArray[T Text](data T, fn func(elem T) error) error {
 func IterateStringArray[T Text](data T, fn func(s T) error) error {
 	d := bytesOf(data)
 	var a arena
-	i, step := openContainer(d, '[')
+	i, step := openContainer(d, 0, '[')
 	for step == stepItem {
 		v, end, st := tokenAt(&a, d, i, arenaRoom, anyBody)
 		if st == strMalformed {
@@ -241,7 +241,7 @@ func IterateStringArray[T Text](data T, fn func(s T) error) error {
 		}
 		i, step = nextItem(d, end, ']')
 	}
-	return step.err()
+	return step.closeErr(d, i)
 }
 
 // FindMember returns the raw value of the first member of the object in data whose
@@ -249,23 +249,41 @@ func IterateStringArray[T Text](data T, fn func(s T) error) error {
 // with IterateObject, which refuses malformed input and repeated names.
 func FindMember[T Text](data T, name string) (T, bool) {
 	d := bytesOf(data)
-	i, step := openContainer(d, '{')
-	var zero T
+	at, ok := memberStart(d, 0, bytesOf(name))
+	end := 0
+	if ok {
+		end, ok = skipValueAt(d, at)
+	}
+	if !ok {
+		var zero T
+		return zero, false
+	}
+	return view[T](d, at, end), true
+}
+
+// memberStart returns the index of the value of the first member of the object at or
+// after data[i] whose decoded name equals name, reading only the members before it;
+// a value that starts past the end of data is not found.
+func memberStart(data []byte, i int, name []byte) (int, bool) {
+	i, step := openContainer(data, i, '{')
 	for step == stepItem {
-		end, equal, ok := matchName(d, i, bytesOf(name))
+		end, equal, ok := matchName(data, i, name)
 		var m member
 		if ok {
-			m, ok = memberValue(d, end)
+			m, ok = colonAfter(data, end)
 		}
 		switch {
 		case !ok:
-			return zero, false
+			return 0, false
 		case equal:
-			return view[T](d, m.valueStart, m.valueEnd), true
+			return m.valueStart, m.valueStart < len(data)
 		}
-		i, step = nextItem(d, m.valueEnd, '}')
+		if m.valueEnd, ok = skipValueAt(data, m.valueStart); !ok {
+			return 0, false
+		}
+		i, step = nextItem(data, m.valueEnd, '}')
 	}
-	return zero, false
+	return 0, false
 }
 
 // matchName scans the string token at data[i], i at most len(data), once, and
@@ -286,23 +304,37 @@ func matchName(data []byte, i int, s []byte) (end int, equal, ok bool) {
 // FindElement returns the raw element at index of the array in data. It checks the
 // elements only up to that one, so check a boundary array once with ValidUTF8.
 func FindElement[T Text](data T, index int) (T, bool) {
-	var zero T
-	if index < 0 {
+	d := bytesOf(data)
+	at, ok := elementStart(d, 0, index)
+	end := 0
+	if ok {
+		end, ok = skipValueAt(d, at)
+	}
+	if !ok {
+		var zero T
 		return zero, false
 	}
-	d := bytesOf(data)
-	i, step := openContainer(d, '[')
-	for n := 0; step == stepItem; n++ {
-		end, ok := skipValueAt(d, i)
-		switch {
-		case !ok:
-			return zero, false
-		case n == index:
-			return view[T](d, i, end), true
-		}
-		i, step = nextItem(d, end, ']')
+	return view[T](d, at, end), true
+}
+
+// elementStart returns the index of the element at index of the array at or after
+// data[i], reading only the elements before it; one past the end of data is not found.
+func elementStart(data []byte, i, index int) (int, bool) {
+	if index < 0 {
+		return 0, false
 	}
-	return zero, false
+	i, step := openContainer(data, i, '[')
+	for n := 0; step == stepItem; n++ {
+		if n == index {
+			return i, i < len(data)
+		}
+		end, ok := skipValueAt(data, i)
+		if !ok {
+			return 0, false
+		}
+		i, step = nextItem(data, end, ']')
+	}
+	return 0, false
 }
 
 // scanStep is what a container walk meets at its position.
@@ -310,11 +342,11 @@ type scanStep uint8
 
 const (
 	stepItem      scanStep = iota // an item starts there
-	stepEnd                       // the container closed and only whitespace follows
+	stepEnd                       // the container closes there
 	stepMalformed                 // anything else
 )
 
-// err maps the step that ends a walk to its result.
+// err maps the step that ends the walk of a value to its result.
 func (s scanStep) err() error {
 	if s == stepEnd {
 		return nil
@@ -322,41 +354,44 @@ func (s scanStep) err() error {
 	return ErrMalformed
 }
 
-// openContainer finds the first item of the container that opener starts in data,
-// whitespace allowed around it, or else returns 0 and the step that ends the walk.
-func openContainer(data []byte, opener byte) (int, scanStep) {
-	i := skipWS(data, 0)
+// closeErr maps the step that ends the walk of a document, at its closer data[i] at
+// stepEnd, to its result: only whitespace may follow the closer.
+func (s scanStep) closeErr(data []byte, i int) error {
+	if s == stepEnd && skipWS(data, i+1) == len(data) {
+		return nil
+	}
+	return ErrMalformed
+}
+
+// openContainer finds the first item of the container that opener starts at or
+// after data[i], past whitespace, or else returns the step that ends the walk and,
+// at stepEnd, the index of the closer.
+func openContainer(data []byte, i int, opener byte) (int, scanStep) {
+	i = skipWS(data, i)
 	if i == len(data) || data[i] != opener {
 		return 0, stepMalformed
 	}
 	i = skipWS(data, i+1)
 	if i < len(data) && data[i] == closerOf(opener) {
-		return 0, closeAt(data, i)
+		return i, stepEnd
 	}
 	return i, stepItem
 }
 
 // nextItem moves past the separator that follows an item ending at data[i] and
-// finds the next item, or else returns 0 and the step that ends the walk.
+// finds the next item, or else returns the step that ends the walk and, at stepEnd,
+// the index of the closer.
 func nextItem(data []byte, i int, closer byte) (int, scanStep) {
 	i = skipWS(data, i)
 	switch {
 	case i == len(data):
 		return 0, stepMalformed
 	case data[i] == closer:
-		return 0, closeAt(data, i)
+		return i, stepEnd
 	case data[i] != ',':
 		return 0, stepMalformed
 	}
 	return skipWS(data, i+1), stepItem
-}
-
-// closeAt ends a walk at the closer data[i], which only whitespace may follow.
-func closeAt(data []byte, i int) scanStep {
-	if skipWS(data, i+1) != len(data) {
-		return stepMalformed
-	}
-	return stepEnd
 }
 
 // memberAt reads the member whose name token starts at data[i].

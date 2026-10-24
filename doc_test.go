@@ -506,6 +506,11 @@ func sameScalar[V comparable](got V, ok bool, want V, wantOK bool) bool {
 	return ok == wantOK && (ok && got == want || !ok && got == zero)
 }
 
+// sameView reports whether got, ok is want, wantOK, and got nil when ok is false.
+func sameView(got []byte, ok bool, want []byte, wantOK bool) bool {
+	return ok == wantOK && (ok && bytes.Equal(got, want) || !ok && got == nil)
+}
+
 // spillAllocs is how many allocations the map of a name set takes once its names
 // pass the ones it holds inline.
 const spillAllocs = 4
@@ -675,6 +680,95 @@ func refValue(data []byte, i int) int {
 		}
 	}
 	return refNumber(data, i)
+}
+
+// shallowScan reads the container that opener starts at data[i], past whitespace, by
+// the grammar of the walks: visit takes each name token, nil for an element, and its
+// value's span, end -1 where it fails; it returns the closer's index or an error.
+func shallowScan(data []byte, i int, opener byte, visit func(key []byte, at, end int) error) (int, error) {
+	closer := refCloser(opener)
+	if i = refSpace(data, i); !refAt(data, i, opener) {
+		return 0, ErrMalformed
+	}
+	if i = refSpace(data, i+1); refAt(data, i, closer) {
+		return i, nil
+	}
+	for {
+		var key []byte
+		if opener == '{' {
+			if key, i = shallowKey(data, i); i < 0 {
+				return 0, ErrMalformed
+			}
+		}
+		end := refValue(data, i)
+		if err := visit(key, i, end); err != nil {
+			return 0, err
+		}
+		if end < 0 {
+			return 0, ErrMalformed
+		}
+		if i = refSpace(data, end); refAt(data, i, closer) {
+			return i, nil
+		}
+		if !refAt(data, i, ',') {
+			return 0, ErrMalformed
+		}
+		i = refSpace(data, i+1)
+	}
+}
+
+// shallowKey reads the name token at data[i] and its colon: it returns the token and
+// the index of the value, past whitespace, or -1.
+func shallowKey(data []byte, i int) (key []byte, at int) {
+	end := refString(data, i)
+	if end < 0 {
+		return nil, -1
+	}
+	if j := refSpace(data, end); refAt(data, j, ':') {
+		return data[i:end], refSpace(data, j+1)
+	}
+	return nil, -1
+}
+
+// stdName decodes the name token key with encoding/json.
+func stdName(t *testing.T, key []byte) string {
+	t.Helper()
+	var name string
+	if err := json.Unmarshal(key, &name); err != nil {
+		t.Fatalf("encoding/json reads the name %q with %v, want nil", key, err)
+	}
+	return name
+}
+
+// leadKinds maps each byte that starts a JSON value to the kind of that value.
+func leadKinds() map[byte]Kind {
+	kinds := map[byte]Kind{
+		'n': KindNull, 't': KindBool, 'f': KindBool, '-': KindNumber,
+		'"': KindString, '[': KindArray, '{': KindObject,
+	}
+	for c := byte('0'); c <= '9'; c++ {
+		kinds[c] = KindNumber
+	}
+	return kinds
+}
+
+// stdKind returns the kind of v, a value encoding/json decodes into an any.
+func stdKind(v any) Kind {
+	switch v.(type) {
+	case nil:
+		return KindNull
+	case bool:
+		return KindBool
+	case float64:
+		return KindNumber
+	case string:
+		return KindString
+	case []any:
+		return KindArray
+	case map[string]any:
+		return KindObject
+	}
+	return KindInvalid
 }
 
 // opens reports whether the first byte of data past JSON whitespace is opener.
@@ -963,3 +1057,39 @@ func sharedEnd[R endRule](data []byte, j int) (int, bool) {
 		}
 	}
 }
+
+// Name counts IterateMembers documents: the names it holds inline; manyNames is
+// well past them.
+const (
+	documentedInlineNames = 32
+	manyNames             = 100
+)
+
+// manyMembers returns an object of n members named k0, k1, ... whose last
+// name repeats the name at index dup when dup is not negative.
+func manyMembers(n, dup int) string {
+	var sb strings.Builder
+	sb.WriteByte('{')
+	for i := range n {
+		if i > 0 {
+			sb.WriteByte(',')
+		}
+		name := i
+		if i == n-1 && dup >= 0 {
+			name = dup
+		}
+		sb.WriteString(`"k`)
+		sb.WriteString(strconv.Itoa(name))
+		sb.WriteString(`":`)
+		sb.WriteString(strconv.Itoa(i))
+	}
+	sb.WriteByte('}')
+	return sb.String()
+}
+
+// escapedRepeat is an object whose second name, escaped, repeats the first.
+const escapedRepeat = `{"a":1,"\u0061":2}`
+
+// fixtureObject is a small log record for the scan benchmarks.
+const fixtureObject = `{"facility":23,"severity":3,"hostname":"FW01","app_name":"utm",` +
+	`"source":"10.0.0.1","message":"test"}`

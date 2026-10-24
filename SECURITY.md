@@ -59,6 +59,17 @@ untrusted peers. It defends against:
   `IterateObject` and `DecodeValue` included, may have called its callback on
   the items before the fault, so a callback defers its effects until the walk
   returns nil.
+- **A Cursor reads only what its result needs.** A `Cursor` checks the bytes
+  it reads by the same rules, stops at a match without reading the value it
+  finds, and, in a checked document, reads nothing past its value, so it
+  reports nothing about the rest of the document. In unchecked input a skip
+  counts only its own opener and closer, so where brackets interleave a
+  Cursor may read past the end a skip gives its value or a value it is in.
+  Check a boundary document once with `ValidUTF8`, and with
+  `IterateDocument` or `WalkTokens` where a repeated name must be refused,
+  before reading it with a Cursor. Its iterations call their callback on an
+  item before they skip it, so a callback may see the item whose bytes then
+  fail.
 - **One decoding rule.** Every decoder follows `encoding/json`: surrogate
   pairs join, and a lone surrogate escape or a byte that `utf8.DecodeRune`
   rejects becomes U+FFFD. `EqualString` and `FindMember` compare by the same
@@ -74,8 +85,10 @@ untrusted peers. It defends against:
   leaves whose names decode alike; its name sets are tables like that one.
   `IterateDocument`, `IterateObject` in every other respect, also checks the
   names of every object nested in a member's value that way, and `WalkTokens`
-  the names of every object it walks. `IterateFields` and `FindMember` do not
-  check; `FindMember` returns the first match.
+  the names of every object it walks. A Cursor's `IterateMembers` refuses a
+  repeat among the members of its own object, with the name set and chunks of
+  `IterateMembers`. `IterateFields` and the `FindMember` function and method
+  do not check, and `FindMember` returns the first match.
 - **No allocation on hostile numbers.** `DecodeInt64` and `DecodeUint64`
   reject a value past their range without allocating, and `DecodeFloat64` and
   `DecodeFloat32` reject a magnitude past their range before `strconv` would
@@ -115,6 +128,7 @@ untrusted peers. It defends against:
 | Validator stack use | constant |
 | Validator memory | 256 levels inline, then one bit per level reached, in a spill that grows with the depth |
 | `IterateMembers`, `IterateObject` and `IterateDocument` name set | 32 names inline, then one map keyed by the name views |
+| `Cursor.IterateMembers` names | the name set and decoded-name chunks of `IterateMembers`, for the object at the cursor |
 | `IterateDocument` nested name sets | one for each object open inside a member's value: 2 inline, then heap stacks that grow with the depth; decoded nested names take chunks of their own, apart from the member names, and give their room back when their object closes; a set reuses the map of the set closed at its level, cleared, when it held at most 1024 names, and drops a larger one |
 | Decoded strings of `IterateStringArray` and `WalkStrings` | chunks that start at the first string to decode; a new chunk takes the rest of the document up to 4 KiB, twice the last chunk or the string it must hold, whichever is most |
 | `WalkTokens` name sets | one for each open object: 2 inline, then a heap stack that grows with the depth; 32 names inline each, then one map keyed by the name views; a set reuses the map of the set closed at its level, cleared, when it held at most 1024 names, and drops a larger one |

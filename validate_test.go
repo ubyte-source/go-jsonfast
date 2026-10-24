@@ -627,6 +627,7 @@ func nameProbes() map[string][]string {
 			"TestFlattenObjectGivesBackTheRoomOfTheObjectsItLeaves",
 			"TestFlattenObjectSizesTheChunksOfObjectNamesByTheRestOfData",
 		},
+		"`Cursor.IterateMembers` names": {"TestCursorIterateMembersAllocs"},
 	}
 }
 

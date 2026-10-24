@@ -300,7 +300,7 @@ func (w *walker) restMembers() error {
 		}
 		i, step = nextItem(w.data, m.valueEnd, '}')
 	}
-	if err := step.err(); err != nil {
+	if err := step.closeErr(w.data, i); err != nil {
 		return err
 	}
 	return ErrDuplicateName

@@ -13,9 +13,6 @@ import (
 	"testing"
 )
 
-// escapedRepeat is an object whose second name, escaped, repeats the first.
-const escapedRepeat = `{"a":1,"\u0061":2}`
-
 // objectMalformed returns texts that no object walk accepts.
 func objectMalformed() []string {
 	return []string{
@@ -156,69 +153,18 @@ type shallowItem struct {
 // shallowWalk reads the container that opener starts in data by the grammar of the
 // container walks: its items up to the first fault, each once whole, and
 // ErrMalformed unless it closed with only whitespace around it.
-func shallowWalk(data []byte, opener byte) (items []shallowItem, err error) {
-	closer := refCloser(opener)
-	i := refSpace(data, 0)
-	if !refAt(data, i, opener) {
-		return nil, ErrMalformed
-	}
-	if i = refSpace(data, i+1); refAt(data, i, closer) {
-		return nil, shallowEnd(data, i)
-	}
-	for {
-		item, end := shallowItemAt(data, i, opener)
-		if end < 0 {
-			return items, ErrMalformed
+func shallowWalk(data []byte, opener byte) ([]shallowItem, error) {
+	var items []shallowItem
+	closer, err := shallowScan(data, 0, opener, func(key []byte, at, end int) error {
+		if end >= 0 {
+			items = append(items, shallowItem{key: key, value: data[at:end]})
 		}
-		items = append(items, item)
-		if i = refSpace(data, end); refAt(data, i, closer) {
-			return items, shallowEnd(data, i)
-		}
-		if !refAt(data, i, ',') {
-			return items, ErrMalformed
-		}
-		i = refSpace(data, i+1)
+		return nil
+	})
+	if err == nil && refSpace(data, closer+1) != len(data) {
+		err = ErrMalformed
 	}
-}
-
-// shallowItemAt reads the item at data[i] of the container that opener starts and
-// returns it and the index past it, or -1.
-func shallowItemAt(data []byte, i int, opener byte) (item shallowItem, end int) {
-	if opener == '{' {
-		nameEnd := refString(data, i)
-		if nameEnd < 0 {
-			return shallowItem{}, -1
-		}
-		item.key, i = data[i:nameEnd], refSpace(data, nameEnd)
-		if !refAt(data, i, ':') {
-			return shallowItem{}, -1
-		}
-		i = refSpace(data, i+1)
-	}
-	if end = refValue(data, i); end < 0 {
-		return shallowItem{}, -1
-	}
-	item.value = data[i:end]
-	return item, end
-}
-
-// shallowEnd returns nil when only whitespace follows the closer data[i], and
-// ErrMalformed otherwise.
-func shallowEnd(data []byte, i int) error {
-	if refSpace(data, i+1) != len(data) {
-		return ErrMalformed
-	}
-	return nil
-}
-
-// stdName decodes the name token of item with encoding/json.
-func stdName(t *testing.T, item shallowItem) string {
-	t.Helper()
-	var name string
-	if err := json.Unmarshal(item.key, &name); err != nil {
-		t.Fatalf("encoding/json reads the name %q with %v, want nil", item.key, err)
-	}
-	return name
+	return items, err
 }
 
 // sameItems reports whether the names and values a walk reported are those of
@@ -260,10 +206,6 @@ func FuzzIterateFields(f *testing.F) {
 		}
 	})
 }
-
-// fixtureObject is a small log record for the scan benchmarks.
-const fixtureObject = `{"facility":23,"severity":3,"hostname":"FW01","app_name":"utm",` +
-	`"source":"10.0.0.1","message":"test"}`
 
 func BenchmarkIterateFields(b *testing.B) {
 	data := []byte(fixtureObject)
@@ -347,28 +289,6 @@ func TestIterateMembersRejectsNamesEqualAfterDecoding(t *testing.T) {
 	}
 }
 
-// manyMembers returns an object of n members named k0, k1, ... whose last
-// name repeats the name at index dup when dup is not negative.
-func manyMembers(n, dup int) string {
-	var sb strings.Builder
-	sb.WriteByte('{')
-	for i := range n {
-		if i > 0 {
-			sb.WriteByte(',')
-		}
-		name := i
-		if i == n-1 && dup >= 0 {
-			name = dup
-		}
-		sb.WriteString(`"k`)
-		sb.WriteString(strconv.Itoa(name))
-		sb.WriteString(`":`)
-		sb.WriteString(strconv.Itoa(i))
-	}
-	sb.WriteByte('}')
-	return sb.String()
-}
-
 func TestIterateMembersFindsDuplicatesAcrossTheSpill(t *testing.T) {
 	for _, tc := range []struct {
 		want   error
@@ -446,18 +366,6 @@ func TestIterateMembersFollowsTheIterateFieldsContract(t *testing.T) {
 	}
 }
 
-// Name counts IterateMembers documents: the names it holds inline; manyNames is
-// well past them.
-const (
-	documentedInlineNames = 32
-	manyNames             = 100
-)
-
-// sameView reports whether got, ok is want, wantOK, and got nil when ok is false.
-func sameView(got []byte, ok bool, want []byte, wantOK bool) bool {
-	return ok == wantOK && (ok && bytes.Equal(got, want) || !ok && got == nil)
-}
-
 func TestIterateMembersAllocs(t *testing.T) {
 	inline := []byte(manyMembers(documentedInlineNames, -1))
 	inlineDoc := string(inline)
@@ -502,7 +410,7 @@ func FuzzIterateMembers(f *testing.F) {
 		seen := map[string]bool{}
 		var wantOrder []string
 		for _, item := range items {
-			name := stdName(t, item)
+			name := stdName(t, item.key)
 			if seen[name] {
 				want = ErrDuplicateName
 				break
@@ -1728,7 +1636,7 @@ func FuzzFindMember(f *testing.F) {
 	f.Fuzz(func(t *testing.T, data []byte, key string) {
 		got, ok := FindMember(data, key)
 		items, walkErr := shallowWalk(data, '{')
-		k := slices.IndexFunc(items, func(item shallowItem) bool { return stdName(t, item) == key })
+		k := slices.IndexFunc(items, func(item shallowItem) bool { return stdName(t, item.key) == key })
 		var want []byte
 		if k >= 0 {
 			want = items[k].value
@@ -1805,7 +1713,7 @@ func TestFindElementAnswersANegativeIndexAtOnce(t *testing.T) {
 			}
 		}
 	}
-	assertCost(t, refuse(`[1]`), refuse(`[1]`+strings.Repeat(" ", decidedSpaces)), 1)
+	assertCost(t, refuse(oneArray), refuse("[1"+strings.Repeat(" ", decidedSpaces)+"]"), 1)
 }
 
 func TestFindElementAllocs(t *testing.T) {

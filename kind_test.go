@@ -30,37 +30,6 @@ func TestKindOfClassifiesValues(t *testing.T) {
 	}
 }
 
-// leadKinds maps each byte that starts a JSON value to the kind of that value.
-func leadKinds() map[byte]Kind {
-	kinds := map[byte]Kind{
-		'n': KindNull, 't': KindBool, 'f': KindBool, '-': KindNumber,
-		'"': KindString, '[': KindArray, '{': KindObject,
-	}
-	for c := byte('0'); c <= '9'; c++ {
-		kinds[c] = KindNumber
-	}
-	return kinds
-}
-
-// stdKind returns the kind of v, a value encoding/json decodes into an any.
-func stdKind(v any) Kind {
-	switch v.(type) {
-	case nil:
-		return KindNull
-	case bool:
-		return KindBool
-	case float64:
-		return KindNumber
-	case string:
-		return KindString
-	case []any:
-		return KindArray
-	case map[string]any:
-		return KindObject
-	}
-	return KindInvalid
-}
-
 func TestKindOfClassifiesEveryLeadByte(t *testing.T) {
 	kinds := leadKinds()
 	for n := range math.MaxUint8 + 1 {
