@@ -39,13 +39,13 @@ func TestPlainByteAndBodyByteClassifyEveryByte(t *testing.T) {
 	}
 }
 
-func TestPlainWordAndBodyMaskMatchTheirBytesInEveryLane(t *testing.T) {
+func TestPlainMaskAndBodyMaskMatchTheirBytesInEveryLane(t *testing.T) {
 	for lane := range wordSize {
 		for n := range math.MaxUint8 + 1 {
 			c := byte(n)
 			w := laneWord(c, lane)
-			if got, want := plainWord(w), isPlainSpec(c); got != want {
-				t.Fatalf("plainWord(%#02x in lane %d) = %v, want %v", c, lane, got, want)
+			if got, want := plainMask(w) == 0, isPlainSpec(c); got != want {
+				t.Fatalf("plainMask(%#02x in lane %d) == 0 is %v, want %v", c, lane, got, want)
 			}
 			if got, want := bodyMask(w) == 0, isBodySpec(c); got != want {
 				t.Fatalf("bodyMask(%#02x in lane %d) == 0 is %v, want %v", c, lane, got, want)
@@ -54,7 +54,7 @@ func TestPlainWordAndBodyMaskMatchTheirBytesInEveryLane(t *testing.T) {
 	}
 }
 
-func TestPlainWordAndBodyMaskIgnoreBorrowsAcrossLanes(t *testing.T) {
+func TestPlainMaskAndBodyMaskIgnoreBorrowsAcrossLanes(t *testing.T) {
 	for _, lanes := range [][2]int{
 		{0, 1}, {wordSize/2 - 1, wordSize / 2}, {wordSize - 2, wordSize - 1}, {0, wordSize - 1},
 	} {
@@ -63,8 +63,8 @@ func TestPlainWordAndBodyMaskIgnoreBorrowsAcrossLanes(t *testing.T) {
 			buf := []byte("aaaaaaaa")
 			buf[lanes[0]], buf[lanes[1]] = lo, hi
 			w := binary.LittleEndian.Uint64(buf)
-			if got, want := plainWord(w), isPlainSpec(lo) && isPlainSpec(hi); got != want {
-				t.Fatalf("plainWord(%#02x, %#02x in lanes %v) = %v, want %v", lo, hi, lanes, got, want)
+			if got, want := plainMask(w) == 0, isPlainSpec(lo) && isPlainSpec(hi); got != want {
+				t.Fatalf("plainMask(%#02x, %#02x in lanes %v) == 0 is %v, want %v", lo, hi, lanes, got, want)
 			}
 			if got, want := bodyMask(w) == 0, isBodySpec(lo) && isBodySpec(hi); got != want {
 				t.Fatalf("bodyMask(%#02x, %#02x in lanes %v) == 0 is %v, want %v", lo, hi, lanes, got, want)
@@ -96,19 +96,19 @@ func TestFirstLaneOfAMaskIsItsFirstRejectedByte(t *testing.T) {
 	}
 }
 
-func TestZeroLanesFindsAnyZeroByte(t *testing.T) {
+func TestBorrowLanesFlagsExactlyTheWordsWithAZeroByte(t *testing.T) {
 	for lane := range wordSize {
-		if zeroLanes(laneWord(0, lane)) == 0 {
-			t.Errorf("zeroLanes(%#x) = 0, want the bit of the zero byte in lane %d", laneWord(0, lane), lane)
+		if got := borrowLanes(laneWord(0, lane)) & swarHi; got == 0 || firstLane(got) != lane {
+			t.Errorf("borrowLanes(%#x) & swarHi = %#x, want its first flag in lane %d", laneWord(0, lane), got, lane)
 		}
 	}
 	for _, w := range []uint64{laneWord('a'), swarHi, ^uint64(0), swarLo} {
-		if zeroLanes(w) != 0 {
-			t.Errorf("zeroLanes(%#x) = %#x, want 0 for a word with no zero byte", w, zeroLanes(w))
+		if got := borrowLanes(w) & swarHi; got != 0 {
+			t.Errorf("borrowLanes(%#x) & swarHi = %#x, want 0 for a word with no zero byte", w, got)
 		}
 	}
-	if zeroLanes(laneWord(0, 2, wordSize-1))&swarHi == 0 {
-		t.Errorf("zeroLanes(%#x) = no high bit, want the bits of its two zero bytes", laneWord(0, 2, wordSize-1))
+	if got := borrowLanes(laneWord(0, 2, wordSize-1)) & swarHi; got == 0 || firstLane(got) != 2 {
+		t.Errorf("borrowLanes(%#x) & swarHi = %#x, want its first flag in lane 2", laneWord(0, 2, wordSize-1), got)
 	}
 }
 
@@ -134,7 +134,7 @@ type runRule interface {
 
 type plainRule struct{}
 
-func (plainRule) word(w uint64) bool { return plainWord(w) }
+func (plainRule) word(w uint64) bool { return plainMask(w) == 0 }
 
 func (plainRule) single(c byte) bool { return plainByte(c) }
 

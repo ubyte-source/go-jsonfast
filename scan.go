@@ -262,12 +262,11 @@ func bracedRun(data []byte, j int, opener byte) int {
 		}
 	}
 	open, shut := swarLo*uint64(opener), swarLo*uint64(closerOf(opener))
-	for range (len(data) - j) / wordSize {
+	for last := len(data) - wordSize; j <= last; j += wordSize {
 		w := load64(data, j)
-		if m := zeroLanes(w^swarQuote) | zeroLanes(w^open) | zeroLanes(w^shut); m != 0 {
+		if m := (borrowLanes(w^swarQuote) | borrowLanes(w^open) | borrowLanes(w^shut)) & swarHi; m != 0 {
 			return j + firstLane(m)
 		}
-		j += wordSize
 	}
 	return bracedBytes(data, j, opener)
 }

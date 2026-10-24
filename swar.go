@@ -20,11 +20,11 @@ const (
 	swarBackslash        = swarLo * '\\'
 )
 
-// zeroLanes sets the high bit of every zero byte of x. A borrow may also set
-// it above a zero byte, so the result tells exactly whether x has one, and its
-// lowest flag is exact.
-func zeroLanes(x uint64) uint64 {
-	return (x - swarLo) &^ x & swarHi
+// borrowLanes sets the high bit of every zero byte of x; a borrow may also set
+// it above a zero byte, so its high bits tell exactly whether x has one, and the
+// lowest of them is exact. Its other bits are noise for the caller to mask off.
+func borrowLanes(x uint64) uint64 {
+	return (x - swarLo) &^ x
 }
 
 // plainByte reports whether JSON copies c as it is: ASCII from the space up,
@@ -37,12 +37,7 @@ func plainByte(c byte) bool {
 // which flags only bytes above one that is flagged already, so the lowest flag
 // is exact.
 func plainMask(w uint64) uint64 {
-	return ((w-swarSpace)|w)&swarHi | zeroLanes(w^swarQuote) | zeroLanes(w^swarBackslash)
-}
-
-// plainWord reports whether every byte of w is plain.
-func plainWord(w uint64) bool {
-	return plainMask(w) == 0
+	return ((w - swarSpace) | w | borrowLanes(w^swarQuote) | borrowLanes(w^swarBackslash)) & swarHi
 }
 
 // bodyByte reports whether a string body holds c as it is, UTF-8 unchecked:
@@ -53,7 +48,7 @@ func bodyByte(c byte) bool {
 
 // bodyMask flags the bytes of w that are not body bytes; its lowest flag is exact.
 func bodyMask(w uint64) uint64 {
-	return (w-swarSpace)&^w&swarHi | zeroLanes(w^swarQuote) | zeroLanes(w^swarBackslash)
+	return ((w-swarSpace)&^w | borrowLanes(w^swarQuote) | borrowLanes(w^swarBackslash)) & swarHi
 }
 
 // firstLane returns the index in its word of the byte that the lowest set bit
@@ -63,27 +58,29 @@ func firstLane(m uint64) int {
 }
 
 // plainRun returns the index of the first byte at or after data[j] that is not plain,
-// or len(data). It tests data[j] alone, so a run that stops at once costs no word, then
-// the words past it; if a word fits from data[j], the last word of data covers a tail.
+// or len(data): data[j] alone, then a word at a time to the last word of data; a tail
+// under a word is that word shifted right past the bytes before it, zeros stopping it.
 func plainRun(data []byte, j int) int {
-	whole := len(data)-j >= wordSize
-	if j != len(data) {
-		if !plainByte(data[j]) {
-			return j
-		}
-		j++
+	if j == len(data) || !plainByte(data[j]) {
+		return j
 	}
-	words := (len(data) - j) / wordSize
-	for range words {
+	j++
+	last := len(data) - wordSize
+	switch {
+	case last < 0:
+		return plainBytes(data, j)
+	case j > last:
+		return j + firstLane(plainMask(load64(data[last:], 0)>>(byteBits*(j-last))))
+	}
+	for ; j < last; j += wordSize {
 		if m := plainMask(load64(data, j)); m != 0 {
 			return j + firstLane(m)
 		}
-		j += wordSize
 	}
-	if whole && plainWord(load64(data, len(data)-wordSize)) {
-		return len(data)
+	if m := plainMask(load64(data, last)); m != 0 {
+		return last + firstLane(m)
 	}
-	return plainBytes(data, j)
+	return len(data)
 }
 
 // plainBytes is plainRun one byte at a time.
@@ -97,11 +94,10 @@ func plainBytes(data []byte, j int) int {
 // bodyRun returns the index of the first byte at or after data[j] that is not
 // a body byte, or len(data), testing one SWAR word at a time.
 func bodyRun(data []byte, j int) int {
-	for range (len(data) - j) / wordSize {
+	for last := len(data) - wordSize; j <= last; j += wordSize {
 		if m := bodyMask(load64(data, j)); m != 0 {
 			return j + firstLane(m)
 		}
-		j += wordSize
 	}
 	return bodyBytes(data, j)
 }
