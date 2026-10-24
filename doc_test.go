@@ -249,7 +249,7 @@ func assertCost(t *testing.T, small, large func(), scale int) {
 		}
 		got = fmt.Sprintf("%v and %d bytes, against %v and %d", largeTime, largeBytes, smallTime, smallBytes)
 	}
-	t.Errorf("the larger run took %s, want at most %g times the smaller (PERF-1.2, PERF-3.1)", got, bound)
+	t.Errorf("the larger run took %s, want at most %g times the smaller", got, bound)
 }
 
 // decidedSpaces is how much whitespace pads the documents of the tests whose depth

@@ -613,7 +613,7 @@ func limitConstants() map[string]string {
 	}
 }
 
-// limitName matches the names M24 takes for limits.
+// limitName matches the names that mark a numeric constant as a limit.
 var limitName = regexp.MustCompile(`(?i)^(max|min)|limit|(cap|size|bytes|depth)$`)
 
 // tableRows returns the parameter and the text of each row of the table under
