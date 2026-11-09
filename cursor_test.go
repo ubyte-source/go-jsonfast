@@ -274,6 +274,12 @@ func TestCursorIterateArrayRefusesAFaultUpToTheCloser(t *testing.T) {
 	}
 }
 
+func TestCursorIterateArrayRefusesNull(t *testing.T) {
+	if got := cursorArray(litNull); !is(got.err, ErrMalformed) || got.raws != nil {
+		t.Errorf("CursorOf(%q).IterateArray saw %q, %v, want no element, ErrMalformed", litNull, got.raws, got.err)
+	}
+}
+
 func TestCursorIterateArrayReadsNothingPastTheCloser(t *testing.T) {
 	for _, doc := range []string{emptyArray + trailer, oneArray + trailer, `[1]]`} {
 		if err := cursorArray(doc).err; err != nil {
@@ -589,6 +595,20 @@ func FuzzCursorKind(f *testing.F) {
 	})
 }
 
+// interleavedMembers returns documents whose brackets interleave below member a, each
+// with the member FindMember then looks up in a.
+func interleavedMembers() []struct{ doc, inner string } {
+	return []struct{ doc, inner string }{{`{"a":{"":[}]`, ""}, {`{"a":{"0":[}]`, "0"}}
+}
+
+func TestCursorFindMemberBelowInterleavedBrackets(t *testing.T) {
+	for _, s := range interleavedMembers() {
+		data := []byte(s.doc)
+		m, at := checkMember(t, data, CursorOf(data), refSpace(data, 0), "a")
+		checkMember(t, data, m, at, s.inner)
+	}
+}
+
 // FuzzCursorFindMember checks FindMember, one level down too, and Raw at what it finds
 // against the shallow grammar read from the Cursor's position on any input, and against
 // encoding/json at each object it accepts.
@@ -600,6 +620,9 @@ func FuzzCursorFindMember(f *testing.F) {
 	f.Add([]byte(`{"a":"\ud800"}`), "a", "")
 	f.Add([]byte(`{"a": `), "a", "")
 	f.Add([]byte(`[[0]]`), "[", "")
+	for _, s := range interleavedMembers() {
+		f.Add([]byte(s.doc), "a", s.inner)
+	}
 	f.Fuzz(func(t *testing.T, data []byte, outer, inner string) {
 		m, at := checkMember(t, data, CursorOf(data), refSpace(data, 0), outer)
 		checkMember(t, data, m, at, inner)
@@ -697,15 +720,15 @@ func checkIteration(t *testing.T, data string, opener byte, got sawItems) {
 func FuzzCursorIterateArray(f *testing.F) {
 	for _, s := range []string{
 		`[1,"two",{"3":3}]`, emptyArray + trailer, `[1,,2]`, oneArray + trailer, `[[1,2],"\ud800"`, `[`,
-		`[{[}]`, `[{]}`,
+		`[{[}]`, `[{]}`, litNull,
 	} {
 		f.Add(s)
 	}
 	f.Fuzz(func(t *testing.T, data string) {
 		got := cursorArray(data)
 		checkIteration(t, data, '[', got)
-		var std []json.RawMessage
-		if !json.Valid([]byte(data)) || json.Unmarshal([]byte(data), &std) != nil {
+		std, ok := stdElements([]byte(data))
+		if !ok {
 			return
 		}
 		if got.err != nil || !slices.EqualFunc(got.raws, std, func(g string, s json.RawMessage) bool {

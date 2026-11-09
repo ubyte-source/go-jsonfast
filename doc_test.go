@@ -201,6 +201,17 @@ func rawEqual(a, b json.RawMessage) bool {
 	return bytes.Equal(a, b)
 }
 
+// stdElements returns the elements encoding/json reads in data, or false when data is
+// no valid array: encoding/json decodes null into a nil slice, which is no array.
+func stdElements(data []byte) ([]json.RawMessage, bool) {
+	var std []json.RawMessage
+	null := bytes.Equal(bytes.TrimSpace(data), []byte(litNull))
+	if null || !json.Valid(data) || json.Unmarshal(data, &std) != nil {
+		return nil, false
+	}
+	return std, true
+}
+
 // errStop is a callback error that the walks must return unchanged.
 var errStop = errors.New("stop")
 

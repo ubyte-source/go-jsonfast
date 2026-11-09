@@ -1258,7 +1258,7 @@ func ExampleWalkTokens() {
 func arrayMalformed() []string {
 	return []string{
 		"", blank, objectA1, `[`, `[ `, `[1,2`, arrayGap, `["`, arrayTrail, `[,1]`, `[,]`,
-		`[1] x`, `[1][2]`, `[1]]`, `["\q"]`, `[tru]`, `[01]`, `[[1]`, `[1,`, `[1;2]`, `[] x`,
+		`[1] x`, `[1][2]`, `[1]]`, `["\q"]`, `[tru]`, `[01]`, `[[1]`, `[1,`, `[1;2]`, `[] x`, litNull,
 	}
 }
 
@@ -1334,10 +1334,8 @@ func FuzzIterateArray(f *testing.F) {
 		if items, want := shallowWalk(data, '['); !is(err, want) || !sameItems(nil, got, items) {
 			t.Fatalf("IterateArray(%q) = %q, %v; the shallow grammar = %q, %v", data, got, err, items, want)
 		}
-		// encoding/json decodes null into a nil slice, which is no array.
-		null := bytes.Equal(bytes.TrimSpace(data), []byte(litNull))
-		var std []json.RawMessage
-		if !json.Valid(data) || null || json.Unmarshal(data, &std) != nil {
+		std, ok := stdElements(data)
+		if !ok {
 			return
 		}
 		if err != nil || !sameValues(got, std) {
