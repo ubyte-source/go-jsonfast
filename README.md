@@ -471,7 +471,7 @@ token each, nesting at `MaxDepth`, or a 64 KiB tool result.
 make test       # the tests of the default, the purego and the 386 build, allocation counts included
 make race       # the same under the race detector, which skips the counts, writing both coverage profiles
 make cover      # race, then fails when either build covers less than 100% of the statements
-make lint       # golangci-lint v2.14.0 on both builds
+make lint       # golangci-lint v2.15.0 on both builds
 make deadcode   # deadcode -test on both builds
 make vuln       # govulncheck
 make bench      # every benchmark of both builds

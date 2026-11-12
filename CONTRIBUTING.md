@@ -6,11 +6,11 @@
 - make, and jq for `make testtime`
 
 The Makefile runs every tool at a pinned version through `go run`:
-golangci-lint v2.14.0, govulncheck v1.8.0, deadcode v0.50.0 and nilaway.
+golangci-lint v2.15.0, govulncheck v1.9.0, deadcode v0.52.0 and nilaway.
 Nothing needs a global install; `GOLANGCI_LINT=<path>`, `GOVULNCHECK=<path>`,
 `DEADCODE=<path>` and `NILAWAY=<path>` point the targets at local binaries of
-the same versions. golangci-lint builds and runs with Go 1.27.3
-(`GOTOOLCHAIN=go1.27.3`), the others with Go 1.26 or later; the go command
+the same versions. golangci-lint builds and runs with Go 1.27.4
+(`GOTOOLCHAIN=go1.27.4`), the others with Go 1.26 or later; the go command
 fetches a missing toolchain.
 
 ```bash
@@ -30,7 +30,7 @@ make ci
 
 `make ci` runs these targets, and the workflows run the same ones: `lint.yml`
 runs `vet`, `lint`, `deadcode` and `vocab`, `test.yml` runs `modcheck`,
-`test`, `cover` and `bench-smoke` on Go 1.25.14 and 1.27.3, `security.yml`
+`test`, `cover` and `bench-smoke` on Go 1.25.14 and 1.27.4, `security.yml`
 runs `vuln` next to CodeQL. `vet`, `lint`, `deadcode`, `test`, `race`,
 `cover`, `bench` and `bench-smoke` check both builds, the default one and
 `-tags purego`, and `test` also runs with `GOARCH=386`, so 32-bit arithmetic
@@ -41,9 +41,9 @@ is gated; `vuln` runs the default build, and so does `fuzz` unless
 |---------------|------|
 | `modcheck`    | `go mod download`, `go mod verify` and `go mod tidy -diff` |
 | `vet`         | `go vet ./...` on both builds |
-| `lint`        | golangci-lint v2.14.0 with `.golangci.yml` on both builds (gosec runs inside it) |
-| `vuln`        | govulncheck v1.8.0 on the module and the toolchain |
-| `deadcode`    | deadcode v0.50.0 `-test ./...` on both builds; any output fails |
+| `lint`        | golangci-lint v2.15.0 with `.golangci.yml` on both builds (gosec runs inside it) |
+| `vuln`        | govulncheck v1.9.0 on the module and the toolchain |
+| `deadcode`    | deadcode v0.52.0 `-test ./...` on both builds; any output fails |
 | `test`        | the tests of both builds and of `GOARCH=386` with `-shuffle=on`; only this run checks allocation counts, which the race detector changes |
 | `race`        | the tests of both builds with `-race`, `-shuffle=on` and `CGO_ENABLED=1`, writing `coverage.out` and `coverage-purego.out` |
 | `bench-smoke` | every benchmark of both builds 100 times, `-benchtime=100x` |
