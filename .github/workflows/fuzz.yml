@@ -45,7 +45,7 @@ jobs:
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
   fuzz:
-    name: Fuzz ${{ matrix.fuzz.pkg }}:${{ matrix.fuzz.target }} ${{ matrix.tags }}
+    name: Fuzz ${{ matrix.fuzz.pkg }}:${{ matrix.fuzz.target }}${{ matrix.tags && format(' {0}', matrix.tags) || '' }}
     needs: targets
     runs-on: ubuntu-24.04
     strategy:
