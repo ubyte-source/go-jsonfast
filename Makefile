@@ -6,7 +6,7 @@ FUZZTIME      ?= 30s
 FUZZ_TARGETS  ?=
 FUZZ_TAGS     ?=
 # FUZZ_GO runs the fuzzer of Go 1.27, which ends a FUZZTIME run without a
-# spurious "context deadline exceeded" failure (go.dev/issue/75804).
+# spurious "context deadline exceeded" failure.
 FUZZ_GO       ?= GOTOOLCHAIN=go1.27.4 $(GO)
 NILAWAY       ?= $(GO) run go.uber.org/nilaway/cmd/nilaway@v0.0.0-20261112030514-ccd005690d1e
 TESTTIME_MAX  ?= 10
@@ -47,7 +47,6 @@ lint: ## Run golangci-lint with .golangci.yml on the default and the purego buil
 fmt: ## Format the code with the formatters of .golangci.yml
 	$(GOLANGCI_LINT) fmt ./...
 
-
 deadcode: ## Fail on any function deadcode -test finds unreachable in either build
 	@out=$$($(DEADCODE) -test ./... && $(DEADCODE) -test -tags purego ./...) && [ -z "$$out" ] || { echo "$$out"; exit 1; }
 
@@ -78,9 +77,6 @@ bench-smoke: ## Run every benchmark of both builds 100 times
 
 vuln: ## Scan the module and the toolchain with govulncheck
 	$(GOVULNCHECK) ./...
-
-
-
 
 vocab: ## Fail on claim names or token words in the Go and Markdown files outside tools/
 	@out=$$(grep -rnE --include='*.go' --include='*.md' --exclude-dir=tools --exclude-dir=.git \
