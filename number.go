@@ -111,11 +111,14 @@ func (b *Builder) appendFloat64(v float64) {
 	}
 }
 
+// paddedExponent starts a negative exponent that strconv pads to two digits.
+const paddedExponent = "e-0"
+
 // trimExponentZero rewrites a trailing e-0X of the exponent form just written
-// as e-X, as encoding/json does; strconv pads the exponent to two digits.
+// as e-X, as encoding/json does.
 func (b *Builder) trimExponentZero() {
-	exp := len(b.buf) - len("e-00")
-	if string(b.buf[exp:exp+len("e-0")]) == "e-0" {
-		b.buf = append(b.buf[:exp+len("e-")], b.buf[exp+len("e-0")])
+	exp := len(b.buf) - len(paddedExponent) - 1
+	if digit := exp + len(paddedExponent); string(b.buf[exp:digit]) == paddedExponent {
+		b.buf = append(b.buf[:digit-1], b.buf[digit])
 	}
 }

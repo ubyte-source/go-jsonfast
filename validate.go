@@ -99,11 +99,12 @@ const (
 // structural bytes; any other byte starts a scalar, whose slot no structural byte has.
 const (
 	slotMask       = 0xf
+	slotFold       = 5 // the shift that folds the high bits of a byte into its slot
 	slotScalar     = 0
-	slotQuote      = ('"' ^ '"'>>5) & slotMask
-	slotOpenObject = ('{' ^ '{'>>5) & slotMask
-	slotColon      = (':' ^ ':'>>5) & slotMask
-	slotComma      = (',' ^ ','>>5) & slotMask
+	slotQuote      = ('"' ^ '"'>>slotFold) & slotMask
+	slotOpenObject = ('{' ^ '{'>>slotFold) & slotMask
+	slotColon      = (':' ^ ':'>>slotFold) & slotMask
+	slotComma      = (',' ^ ','>>slotFold) & slotMask
 	slotEnd        = 12 // the end of data, which every state refuses
 	slotBits       = 4
 )
@@ -140,7 +141,7 @@ func slotAt(data []byte, i int) uint {
 		return slotEnd
 	}
 	c := data[i]
-	if k := uint(c^c>>5) & slotMask; slotBytes[k] == c {
+	if k := uint(c^c>>slotFold) & slotMask; slotBytes[k] == c {
 		return k
 	}
 	return slotScalar
