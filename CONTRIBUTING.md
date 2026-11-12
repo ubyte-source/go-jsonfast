@@ -34,7 +34,7 @@ runs `lint`, `deadcode` and `vocab`, `test.yml` runs `modcheck`, `vet`,
 runs `vuln` next to CodeQL. `vet`, `lint`, `deadcode`, `test`, `race`,
 `cover`, `bench` and `bench-smoke` check both builds, the default one and
 `-tags purego`, and `test` also runs with `GOARCH=386`, so 32-bit arithmetic
-is gated; `vuln` runs the default build, and so does `fuzz` unless
+is gated; `vuln` runs the default build, and so does `make fuzz` unless
 `FUZZ_TAGS=purego` selects the other one.
 
 | Target        | Gate |
@@ -60,8 +60,8 @@ artefact, an untracked file of no source kind, a file under `testdata/fuzz`
 (a crasher is an `f.Add` seed), an empty directory, a file not stored with
 LF, or a `.gitattributes` without `* text=auto eol=lf`.
 
-`make help` lists every target. The fuzz workflow runs every fuzz target
-weekly, reading the list through `make fuzz-list`, which asks
+`make help` lists every target. The fuzz workflow runs every fuzz target of
+both builds weekly, reading the list through `make fuzz-list`, which asks
 `go test -list '^Fuzz'` for every `Fuzz` function of the module and
 fails when there is none. `make fuzz` runs the same list for `FUZZTIME`
 each, or only the `pkg:Target` entries of `FUZZ_TARGETS`, and fails on

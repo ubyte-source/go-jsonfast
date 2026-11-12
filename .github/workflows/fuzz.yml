@@ -45,13 +45,14 @@ jobs:
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
   fuzz:
-    name: Fuzz ${{ matrix.pkg }}:${{ matrix.target }}
+    name: Fuzz ${{ matrix.fuzz.pkg }}:${{ matrix.fuzz.target }} ${{ matrix.tags }}
     needs: targets
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(needs.targets.outputs.matrix) }}
+        fuzz: ${{ fromJSON(needs.targets.outputs.matrix) }}
+        tags: ["", "purego"]
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -68,13 +69,14 @@ jobs:
       - name: Run fuzz
         env:
           FUZZTIME: ${{ needs.targets.outputs.fuzztime }}
-          SPEC: ${{ matrix.pkg }}:${{ matrix.target }}
-        run: make fuzz FUZZ_TARGETS="$SPEC" FUZZTIME="$FUZZTIME"
+          SPEC: ${{ matrix.fuzz.pkg }}:${{ matrix.fuzz.target }}
+          TAGS: ${{ matrix.tags }}
+        run: make fuzz FUZZ_TARGETS="$SPEC" FUZZTIME="$FUZZTIME" FUZZ_TAGS="$TAGS"
 
       - name: Upload corpus on failure
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: fuzz-corpus-${{ strategy.job-index }}-${{ matrix.target }}
-          path: ${{ matrix.pkg }}/testdata/fuzz/${{ matrix.target }}
+          name: fuzz-corpus-${{ strategy.job-index }}-${{ matrix.fuzz.target }}
+          path: ${{ matrix.fuzz.pkg }}/testdata/fuzz/${{ matrix.fuzz.target }}
           if-no-files-found: ignore

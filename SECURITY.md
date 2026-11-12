@@ -177,8 +177,8 @@ kept in the pool.
   persisted credentials.
 - `govulncheck` v1.9.0 and CodeQL with the `security-and-quality` suite
   (`security.yml`).
-- Native fuzzing (`fuzz.yml`, weekly, and `make fuzz`) over every `Fuzz`
-  function, listed by `make fuzz-list`: every scanner, validator and decoder,
-  and the Builder's escaping, number, time, map, value, flattening and batch
-  writers, each with `encoding/json`, `strconv`, `math/big`, `time` or a
+- Native fuzzing (`fuzz.yml`, weekly on both builds, and `make fuzz`) over every
+  `Fuzz` function, listed by `make fuzz-list`: every scanner, validator and
+  decoder, and the Builder's escaping, number, time, map, value, flattening and
+  batch writers, each with `encoding/json`, `strconv`, `math/big`, `time` or a
   reference written independently of the code as its oracle.
