@@ -56,8 +56,9 @@ detector and fails on any test slower than `TESTTIME_MAX` seconds (10).
 (`gofmt -s`) and `ci`, then on both builds `nilaway`, `race-repeat`
 (`-race -count=10 -shuffle=on`) and `fuzz-final` (every fuzz target for 60 s),
 then `testtime` and `treecheck`, which after `make clean` fails on an
-artefact, an untracked file of no source kind, an empty directory, a file not
-stored with LF, or a `.gitattributes` without `* text=auto eol=lf`.
+artefact, an untracked file of no source kind, a file under `testdata/fuzz`
+(a crasher is an `f.Add` seed), an empty directory, a file not stored with
+LF, or a `.gitattributes` without `* text=auto eol=lf`.
 
 `make help` lists every target. The fuzz workflow runs every fuzz target
 weekly, reading the list through `make fuzz-list`, which asks
