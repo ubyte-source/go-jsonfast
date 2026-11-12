@@ -32,6 +32,9 @@ jobs:
       - name: Verify dependencies
         run: make modcheck
 
+      - name: Run go vet on both builds
+        run: make vet
+
       - name: Run the tests of both builds and of GOARCH=386 with their allocation counts
         run: make test
 
